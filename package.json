@@ -6,8 +6,8 @@
   "scripts": {
     "sync-version": "node scripts/sync-version.cjs",
     "release:verify": "npm run sync-version && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings",
-    "release": "bumpp --execute \"npm run release:verify\"",
-    "release:dry": "bumpp --no-push --no-tag --no-commit --execute \"npm run release:verify\""
+    "release": "bumpp --all --execute \"npm run release:verify\"",
+    "release:dry": "bumpp --all --no-push --no-tag --no-commit --execute \"npm run release:verify\""
   },
   "bumpp": {
     "tag": "v%s",

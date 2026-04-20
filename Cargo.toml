@@ -1,0 +1,28 @@
+[workspace]
+members = [
+    "apps/relora",
+    "crates/relora-app",
+    "crates/relora-core",
+    "crates/relora-driver-mysql",
+    "crates/relora-driver-sqlite",
+    "crates/relora-driver-postgres",
+]
+default-members = ["apps/relora"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+anyhow = "1.0"
+arboard = "3.6"
+clap = { version = "4.5", features = ["derive"] }
+crossterm = "0.29"
+postgres = { version = "0.19", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
+ratatui = "0.29"
+mysql = "28.0"
+rusqlite = { version = "0.39", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+url = "2.5"

@@ -1,0 +1,16 @@
+[package]
+name = "relora-driver-sqlite"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "relora-driver-sqlite"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+relora-core = { path = "../relora-core" }
+rusqlite.workspace = true
+serde_json.workspace = true
+url.workspace = true

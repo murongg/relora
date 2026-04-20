@@ -1,0 +1,16 @@
+[package]
+name = "relora"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+arboard.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+ratatui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+relora-app = { path = "../../crates/relora-app" }
+relora-core = { path = "../../crates/relora-core" }

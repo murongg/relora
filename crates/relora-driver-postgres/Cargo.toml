@@ -1,0 +1,16 @@
+[package]
+name = "relora-driver-postgres"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "relora-driver-postgres"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+postgres.workspace = true
+relora-core = { path = "../relora-core" }
+serde_json.workspace = true
+url.workspace = true

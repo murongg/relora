@@ -1,0 +1,8 @@
+[package]
+name = "relora-app"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+relora-core = { path = "../relora-core" }

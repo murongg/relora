@@ -1,0 +1,117 @@
+pub(super) const KEY_INTERRUPT: char = 'c';
+pub(super) const KEY_COMMAND_PALETTE: char = 'p';
+pub(super) const KEY_SQL_HISTORY: char = 'r';
+pub(super) const KEY_CONFIRM_YES_LOWER: char = 'y';
+pub(super) const KEY_CONFIRM_YES_UPPER: char = 'Y';
+pub(super) const KEY_CONFIRM_NO_LOWER: char = 'n';
+pub(super) const KEY_CONFIRM_NO_UPPER: char = 'N';
+
+pub(super) const KEY_LAUNCHER_DOWN: char = 'j';
+pub(super) const KEY_LAUNCHER_UP: char = 'k';
+pub(super) const KEY_LAUNCHER_MULTI_SELECT: char = ' ';
+pub(super) const KEY_LAUNCHER_NEW_CONNECTION: char = 'a';
+pub(super) const KEY_LAUNCHER_EDIT_CONNECTION: char = 'e';
+pub(super) const KEY_LAUNCHER_DELETE_CONNECTION: char = 'd';
+pub(super) const KEY_LAUNCHER_QUIT: char = 'q';
+pub(super) const KEY_LAUNCHER_TEST_CONNECTION: char = 't';
+
+pub(super) const KEY_DATA_GRID_COPY_ROW: char = 'y';
+pub(super) const KEY_DATA_GRID_COPY_CELL: char = 'Y';
+pub(super) const KEY_DATA_GRID_COPY_WHERE: char = 'w';
+pub(super) const KEY_DATA_GRID_EDIT_CELL: char = 'e';
+pub(super) const KEY_DATA_GRID_NEXT_PAGE: char = 'N';
+pub(super) const KEY_DATA_GRID_PREVIOUS_PAGE: char = 'P';
+pub(super) const KEY_DATA_GRID_SHRINK_COLUMN: char = '[';
+pub(super) const KEY_DATA_GRID_EXPAND_COLUMN: char = ']';
+pub(super) const KEY_DATA_GRID_RESET_COLUMN: char = '=';
+pub(super) const KEY_DATA_GRID_FREEZE_COLUMNS: char = 'z';
+pub(super) const KEY_DATA_GRID_CLEAR_FROZEN: char = 'Z';
+
+pub(super) const KEY_BROWSER_QUIT: char = 'q';
+pub(super) const KEY_BROWSER_COMMAND_PALETTE: char = ':';
+pub(super) const KEY_BROWSER_FILTER: char = '/';
+pub(super) const KEY_BROWSER_REFRESH: char = 'r';
+pub(super) const KEY_BROWSER_CANCEL_TASKS: char = 'c';
+pub(super) const KEY_BROWSER_OPEN_SQL: char = 'e';
+pub(super) const KEY_BROWSER_TEMPLATE_SELECT: char = 's';
+pub(super) const KEY_BROWSER_TEMPLATE_INSERT: char = 'i';
+pub(super) const KEY_BROWSER_TEMPLATE_UPDATE: char = 'u';
+pub(super) const KEY_BROWSER_TEMPLATE_DELETE: char = 'x';
+pub(super) const KEY_BROWSER_DOWN: char = 'j';
+pub(super) const KEY_BROWSER_UP: char = 'k';
+pub(super) const KEY_BROWSER_EXPAND_RIGHT: char = 'l';
+pub(super) const KEY_BROWSER_EXPAND_LEFT: char = 'h';
+pub(super) const KEY_BROWSER_TOGGLE_NODE: char = ' ';
+
+pub(super) const KEY_ROW_INSPECTOR_SCROLL_DOWN: char = 'd';
+pub(super) const KEY_ROW_INSPECTOR_SCROLL_UP: char = 'u';
+pub(super) const KEY_ROW_INSPECTOR_QUIT: char = 'q';
+pub(super) const KEY_ROW_INSPECTOR_DOWN: char = 'j';
+pub(super) const KEY_ROW_INSPECTOR_UP: char = 'k';
+pub(super) const KEY_ROW_INSPECTOR_COPY: char = 'y';
+pub(super) const KEY_ROW_INSPECTOR_COPY_UPPER: char = 'Y';
+pub(super) const KEY_ROW_INSPECTOR_EDIT: char = 'e';
+pub(super) const KEY_ROW_INSPECTOR_FORMAT: char = 'f';
+
+pub(super) const KEY_EDITOR_NEW_TAB: char = 't';
+pub(super) const KEY_EDITOR_CLOSE_TAB: char = 'w';
+pub(super) const KEY_EDITOR_CANCEL_TASKS: char = 'k';
+pub(super) const KEY_EDITOR_COMMIT_STAGED: char = 'g';
+
+pub(super) const KEY_CTRL_TAB_DATA: char = '1';
+pub(super) const KEY_CTRL_TAB_SQL: char = '2';
+pub(super) const KEY_CTRL_TAB_STRUCTURE: char = '3';
+
+pub(super) const FKEY_TAB_DATA: u8 = 2;
+pub(super) const FKEY_TAB_SQL: u8 = 3;
+pub(super) const FKEY_TAB_STRUCTURE: u8 = 4;
+pub(super) const FKEY_EDITOR_EXECUTE: u8 = 5;
+pub(super) const FKEY_EDITOR_PREVIOUS_TAB: u8 = 6;
+pub(super) const FKEY_EDITOR_NEXT_TAB: u8 = 7;
+pub(super) const FKEY_EDITOR_PREVIOUS_RESULT: u8 = 8;
+pub(super) const FKEY_EDITOR_NEXT_RESULT: u8 = 9;
+pub(super) const FKEY_SQL_HISTORY: u8 = 10;
+pub(super) const FKEY_EDITOR_EXPLAIN: u8 = 11;
+pub(super) const FKEY_EDITOR_EXPLAIN_ANALYZE: u8 = 12;
+
+pub(super) const RIGHT_TAB_SHORTCUT_HELP: &str = "F2 Data  F3 SQL  F4 Structure";
+pub(super) const LAUNCHER_HELP_FORM: &str = "Connection Form";
+pub(super) const LAUNCHER_HELP_IDLE: &str =
+    "Launch selected: Enter   New connection: a   Edit: e   Delete: d   Multi-select: Space";
+pub(super) const LAUNCHER_FOOTER_FORM: &str =
+    "Type details, Tab switches field, Enter saves, Esc cancels.";
+pub(super) const LAUNCHER_FOOTER_IDLE: &str =
+    "j/k select profiles, Space queues multiple launches, q exits Relora.";
+pub(super) const FORM_SAVE_HELP: &str =
+    "Driver field: t tests, p/m/s or Left/Right selects. Ctrl-T tests anywhere.";
+pub(super) const DRIVER_MISSING_HELP: &str = "Press Esc or Enter to close.";
+pub(super) const DELETE_CONNECTION_HELP: &str = "Press y to delete, n or Esc to cancel.";
+pub(super) const DELETE_OPERATION_HELP: &str = "Press y to execute, n or Esc to cancel.";
+
+pub(super) const FOOTER_COMMAND_HELP: &str =
+    "Command: type to filter, Up/Down select, Enter run, Esc close";
+pub(super) const FOOTER_SQL_HISTORY_HELP: &str =
+    "SQL history: type search, Up/Down select, Enter rerun, Esc close";
+pub(super) const FOOTER_DATA_FILTER_HELP: &str =
+    "Data filter: type quick filter, Enter apply, Esc close";
+pub(super) const FOOTER_CELL_EDIT_HELP: &str =
+    "Cell edit: type new value, Enter preview staged SQL, Esc close";
+pub(super) const FOOTER_ROW_INSPECTOR_HELP: &str = "Cell details: Tab switch box, j/k move or scroll, PgUp/PgDn or Ctrl-U/Ctrl-D scroll, y copy, e edit, f raw/formatted";
+pub(super) const FOOTER_COMPLETION_HELP: &str =
+    "Completion: Enter/Tab accept, Up/Down select, Esc close";
+pub(super) const FOOTER_SQL_RESULTS_HELP: &str =
+    "SQL results: j/k rows, h/l columns, [/] resize, = auto, z freeze, Z clear, Tab cycle";
+pub(super) const FOOTER_SQL_ASSETS_HELP: &str =
+    "SQL assets: j/k browse, Enter expand, Tab/Shift-Tab cycle, F2 Data, F4 Structure";
+pub(super) const FOOTER_SQL_EDITOR_HELP: &str =
+    "SQL editor: Tab/Shift-Tab cycle, Ctrl-Enter current stmt, F10 history, F11 explain";
+pub(super) const FOOTER_SQL_TAB_HELP: &str =
+    "SQL tab: e open editor, F2 Data, F4 Structure, Ctrl-P command";
+pub(super) const FOOTER_STRUCTURE_GRID_HELP: &str =
+    "Structure tab: j/k fields, [/] resize, = auto, z freeze, Z clear, Enter inspect";
+pub(super) const FOOTER_STRUCTURE_HELP: &str =
+    "Structure tab: Tab fields, F2 Data, F3 SQL, r refresh, Ctrl-P command";
+pub(super) const FOOTER_DATA_GRID_HELP: &str =
+    "Data tab: / filter, N/P page, y row, Y cell, w WHERE, e stage edit, [/] resize, z freeze";
+pub(super) const FOOTER_DATA_HELP: &str =
+    "Data tab: / filter, N/P page, F3 SQL, F4 Structure, j/k assets, Tab grid, e SQL, F10 history";

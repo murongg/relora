@@ -5,8 +5,9 @@
   "packageManager": "npm@11.12.1",
   "scripts": {
     "sync-version": "node scripts/sync-version.cjs",
-    "release": "bumpp --execute \"npm run sync-version && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings\"",
-    "release:dry": "bumpp --no-push --no-tag --no-commit --execute \"npm run sync-version && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings\""
+    "release:verify": "npm run sync-version && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings",
+    "release": "bumpp --execute \"npm run release:verify\"",
+    "release:dry": "bumpp --no-push --no-tag --no-commit --execute \"npm run release:verify\""
   },
   "bumpp": {
     "tag": "v%s",

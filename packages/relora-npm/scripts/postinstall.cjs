@@ -138,7 +138,7 @@ async function request(url, redirects, output) {
   }
 
   await new Promise((resolve, reject) => {
-    const request = https.get(
+    const clientRequest = https.get(
       url,
       {
         headers: {
@@ -178,7 +178,7 @@ async function request(url, redirects, output) {
       },
     );
 
-    request.on("error", reject);
+    clientRequest.on("error", reject);
   });
 }
 

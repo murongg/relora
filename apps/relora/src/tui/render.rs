@@ -1487,7 +1487,7 @@ pub(super) fn draw_footer(frame: &mut Frame<'_>, area: Rect, view: WorkspaceView
     frame.render_widget(footer, area);
 }
 
-pub(super) fn tree_item<'a>(row: &'a relora_app::tree::TreeRow) -> ListItem<'a> {
+pub(super) fn tree_item(row: &relora_app::tree::TreeRow) -> ListItem<'_> {
     ListItem::new(Line::from(row.rendered.as_str()))
 }
 

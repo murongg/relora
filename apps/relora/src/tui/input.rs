@@ -6,10 +6,11 @@ pub(super) fn handle_shell_key(app: &mut AppShell, key: KeyEvent) -> Result<bool
             if key.code == KeyCode::Esc
                 && workspace.launcher_available()
                 && workspace_can_return_to_launcher(workspace)
-                && let Some(launcher) = workspace.take_launcher()
             {
-                *app = AppShell::Launcher(launcher);
-                return Ok(false);
+                if let Some(launcher) = workspace.take_launcher() {
+                    *app = AppShell::Launcher(launcher);
+                    return Ok(false);
+                }
             }
             handle_key(workspace, key)?;
             Ok(workspace.should_quit())
@@ -98,11 +99,11 @@ pub(super) fn handle_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
         return app.apply_action(WorkspaceAction::ReverseBrowserFocus);
     }
 
-    if app.data_grid_focused()
-        && let Some(action) = map_data_grid_key_to_action(key)
-    {
-        app.apply_action(action)?;
-        return Ok(());
+    if app.data_grid_focused() {
+        if let Some(action) = map_data_grid_key_to_action(key) {
+            app.apply_action(action)?;
+            return Ok(());
+        }
     }
 
     if app.is_editor_open()

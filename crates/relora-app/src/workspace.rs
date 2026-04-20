@@ -2733,12 +2733,12 @@ impl WorkspaceApp {
                 .into_iter()
                 .flat_map(|tab| tab.pending_execute_request_id.into_iter())
                 .collect::<Vec<_>>();
-            if !request_ids.is_empty()
-                && let Some(session) = self.sessions.get_mut(connection_index)
-            {
-                session.worker.cancel_requests(request_ids.clone())?;
-                for request_id in &request_ids {
-                    session.pending.execute_requests.remove(request_id);
+            if !request_ids.is_empty() {
+                if let Some(session) = self.sessions.get_mut(connection_index) {
+                    session.worker.cancel_requests(request_ids.clone())?;
+                    for request_id in &request_ids {
+                        session.pending.execute_requests.remove(request_id);
+                    }
                 }
             }
         }
@@ -2846,11 +2846,11 @@ impl WorkspaceApp {
             return;
         }
 
-        if let Some(key) = selected_key
-            && let Some(index) = self.entries.iter().position(|entry| entry.key == key)
-        {
-            self.selected_row = index;
-            return;
+        if let Some(key) = selected_key {
+            if let Some(index) = self.entries.iter().position(|entry| entry.key == key) {
+                self.selected_row = index;
+                return;
+            }
         }
 
         self.selected_row = self.selected_row.min(self.entries.len() - 1);

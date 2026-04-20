@@ -155,12 +155,12 @@ impl DatabaseDriver for BlockingPreviewDriver {
         _offset: usize,
     ) -> Result<TablePreview> {
         self.preview_calls += 1;
-        if self.preview_calls > 1
-            && let Some(receiver) = self.unblock_preview.take()
-        {
-            receiver
-                .recv()
-                .map_err(|_| anyhow::anyhow!("preview unblock signal was dropped"))?;
+        if self.preview_calls > 1 {
+            if let Some(receiver) = self.unblock_preview.take() {
+                receiver
+                    .recv()
+                    .map_err(|_| anyhow::anyhow!("preview unblock signal was dropped"))?;
+            }
         }
 
         self.previews

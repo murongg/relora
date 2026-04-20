@@ -285,10 +285,11 @@ fn run_loop(
             break;
         }
 
-        if let AppShell::Workspace(workspace) = app
-            && let Some(clipboard) = clipboard.as_deref_mut()
-        {
-            let _ = sync_clipboard_if_needed(workspace, clipboard, &mut last_synced_copy_sequence);
+        if let AppShell::Workspace(workspace) = app {
+            if let Some(clipboard) = clipboard.as_deref_mut() {
+                let _ =
+                    sync_clipboard_if_needed(workspace, clipboard, &mut last_synced_copy_sequence);
+            }
         }
     }
 

@@ -112,18 +112,19 @@ impl Cli {
             connections.extend(parse_named_connections(split_connection_specs(value))?);
         }
 
-        if connections.is_empty()
-            && let Some(url) = self
+        if connections.is_empty() {
+            if let Some(url) = self
                 .url
                 .filter(|value| !value.trim().is_empty())
                 .or_else(|| std::env::var(DATABASE_URL_ENV).ok())
                 .or_else(|| std::env::var("DATABASE_URL").ok())
                 .filter(|value| !value.trim().is_empty())
-        {
-            connections.push(ConnectionConfig {
-                name: "default".to_string(),
-                url,
-            });
+            {
+                connections.push(ConnectionConfig {
+                    name: "default".to_string(),
+                    url,
+                });
+            }
         }
 
         let saved_connections = load_saved_connections_from_path(&connection_store_path)?;
@@ -241,11 +242,11 @@ pub fn save_saved_connections_to_path(
     path: &Path,
     connections: &[ConnectionConfig],
 ) -> Result<(), ConfigError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent)
-            .map_err(|error| ConfigError::ConnectionStoreIo(error.to_string()))?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|error| ConfigError::ConnectionStoreIo(error.to_string()))?;
+        }
     }
 
     let content = serde_json::to_string_pretty(&json!({

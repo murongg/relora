@@ -2,6 +2,11 @@
 name = "relora-app"
 version.workspace = true
 edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Application state and workspace logic for Relora."
 
 [dependencies]
 anyhow.workspace = true

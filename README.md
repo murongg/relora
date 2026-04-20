@@ -6,6 +6,8 @@ Relora is a terminal database workspace built with Rust and `ratatui`.
 
 It is designed for keyboard-first database work: connect to multiple databases, browse structure, preview data, run SQL, and stage safe edits without leaving the terminal.
 
+License: MIT.
+
 ## What Relora Does
 
 Relora is a terminal alternative to the “open a GUI client just to inspect a table or run a query” workflow.
@@ -117,6 +119,12 @@ For contributors and local development, the source workflow is still:
 
 ```bash
 cargo run -p relora
+```
+
+To build all runtime binaries from source:
+
+```bash
+cargo build --release -p relora -p relora-driver-postgres -p relora-driver-mysql -p relora-driver-sqlite
 ```
 
 ## How to Use Relora
@@ -277,6 +285,12 @@ Relora does not run `cargo install` inside the TUI. End users should not need a 
 
 For npm installs, sidecars are bundled into the downloaded runtime package automatically.
 
+For packagers and non-interactive smoke tests, use:
+
+```bash
+relora paths --json
+```
+
 Driver lookup order:
 
 - `RELORA_POSTGRES_DRIVER` / `RELORA_MYSQL_DRIVER` / `RELORA_SQLITE_DRIVER`
@@ -340,4 +354,19 @@ After building release binaries, package them into the versioned archive expecte
 ```bash
 cargo build --release -p relora -p relora-driver-postgres -p relora-driver-mysql -p relora-driver-sqlite
 node scripts/package-release-bundle.cjs --platform darwin --arch arm64
+```
+
+### Packaging notes
+
+For package-manager integration work, see [docs/packaging.md](docs/packaging.md). A source-build smoke test is also available:
+
+```bash
+scripts/smoke-test-source-build.sh
+```
+
+Maintainers can cut releases with `bumpp`:
+
+```bash
+npm install
+npm run release
 ```

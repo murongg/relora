@@ -1,0 +1,19 @@
+{
+  "name": "relora-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "npm@11.12.1",
+  "scripts": {
+    "sync-version": "node scripts/sync-version.cjs",
+    "release": "bumpp --execute \"npm run sync-version && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings\"",
+    "release:dry": "bumpp --no-push --no-tag --no-commit --execute \"npm run sync-version && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings\""
+  },
+  "bumpp": {
+    "tag": "v%s",
+    "commit": "release: v%s",
+    "push": true
+  },
+  "devDependencies": {
+    "bumpp": "^10.2.3"
+  }
+}

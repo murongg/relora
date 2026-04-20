@@ -17,6 +17,15 @@ pub struct DriverSidecarPlan {
     pub workspace_path: Option<&'static str>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverPathStatus {
+    pub kind: &'static str,
+    pub display_name: &'static str,
+    pub binary: &'static str,
+    pub override_env: String,
+    pub resolved_path: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DriverAvailability {
     Available,
@@ -68,6 +77,24 @@ pub fn test_connection(connection: &ConnectionConfig) -> Result<()> {
     let mut driver = connect(connection)?;
     driver.load_catalog()?;
     Ok(())
+}
+
+pub fn driver_path_statuses() -> Vec<DriverPathStatus> {
+    [
+        DatabaseKind::Postgres,
+        DatabaseKind::MySql,
+        DatabaseKind::Sqlite,
+    ]
+    .into_iter()
+    .filter_map(sidecar_plan)
+    .map(|plan| DriverPathStatus {
+        kind: kind_slug(plan.kind),
+        display_name: plan.display_name,
+        binary: plan.binary,
+        override_env: driver_override_env_var(plan.binary),
+        resolved_path: find_driver_binary(plan.binary),
+    })
+    .collect()
 }
 
 fn driver_availability_from_plan<F>(plan: DriverSidecarPlan, lookup: F) -> DriverAvailability
@@ -302,6 +329,14 @@ fn kind_label(kind: DatabaseKind) -> &'static str {
         DatabaseKind::Postgres => "PostgreSQL",
         DatabaseKind::MySql => "MySQL/MariaDB",
         DatabaseKind::Sqlite => "SQLite",
+    }
+}
+
+fn kind_slug(kind: DatabaseKind) -> &'static str {
+    match kind {
+        DatabaseKind::Postgres => "postgresql",
+        DatabaseKind::MySql => "mysql",
+        DatabaseKind::Sqlite => "sqlite",
     }
 }
 

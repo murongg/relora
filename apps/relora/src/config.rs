@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 
 const APP_NAME: &str = "relora";
@@ -18,6 +18,9 @@ const CONNECTION_STORE_ENV: &str = "RELORA_CONNECTION_STORE";
     about = "Relora: a terminal database workspace for managing multiple connections and browsing objects."
 )]
 pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<CliCommand>,
+
     #[arg(
         long,
         help = "Single database connection URL. Falls back to RELORA_DATABASE_URL or DATABASE_URL."
@@ -37,6 +40,14 @@ pub struct Cli {
         help = "Maximum rows to fetch for the table preview."
     )]
     pub preview_limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum CliCommand {
+    Paths {
+        #[arg(long, help = "Emit machine-readable JSON output.")]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

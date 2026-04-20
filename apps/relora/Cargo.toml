@@ -2,6 +2,11 @@
 name = "relora"
 version.workspace = true
 edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Keyboard-first terminal database workspace built with ratatui."
 
 [dependencies]
 anyhow.workspace = true

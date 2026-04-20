@@ -1,6 +1,6 @@
 use clap::Parser;
 use relora::config::{
-    Cli, LaunchMode, default_connection_store_path, load_saved_connections_from_path,
+    Cli, CliCommand, LaunchMode, default_connection_store_path, load_saved_connections_from_path,
     save_saved_connections_to_path,
 };
 use std::{
@@ -207,4 +207,35 @@ fn cli_does_not_expose_cargo_driver_install_commands() {
     assert!(Cli::try_parse_from(["relora", "driver", "install", "postgres"]).is_err());
     assert!(Cli::try_parse_from(["relora", "driver", "install", "mysql"]).is_err());
     assert!(Cli::try_parse_from(["relora", "driver", "install", "sqlite"]).is_err());
+}
+
+#[test]
+fn cli_supports_paths_command_for_non_interactive_diagnostics() {
+    let cli = Cli::parse_from(["relora", "paths", "--json"]);
+
+    assert_eq!(cli.command, Some(CliCommand::Paths { json: true }));
+}
+
+#[test]
+fn paths_report_lists_store_path_and_known_driver_binaries() {
+    let store_path = temp_store_path("paths-report");
+    let report = relora::commands::build_paths_report_with_store_path(store_path.clone());
+
+    assert_eq!(report.connection_store_path, store_path);
+    assert_eq!(report.app_name, "relora");
+    assert_eq!(report.drivers.len(), 3);
+    assert_eq!(report.drivers[0].binary, "relora-driver-postgres");
+    assert_eq!(report.drivers[1].binary, "relora-driver-mysql");
+    assert_eq!(report.drivers[2].binary, "relora-driver-sqlite");
+
+    let json = serde_json::to_value(&report).expect("paths report should serialize");
+    assert_eq!(
+        json.get("app_name").and_then(|value| value.as_str()),
+        Some("relora")
+    );
+    assert_eq!(
+        json.get("connection_store_path")
+            .and_then(|value| value.as_str()),
+        Some(store_path.to_string_lossy().as_ref())
+    );
 }

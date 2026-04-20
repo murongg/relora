@@ -13,6 +13,10 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+homepage = "https://github.com/murongg/relora"
+repository = "https://github.com/murongg/relora.git"
+license = "MIT"
+rust-version = "1.85"
 
 [workspace.dependencies]
 anyhow = "1.0"

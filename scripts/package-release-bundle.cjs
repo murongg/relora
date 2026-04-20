@@ -31,7 +31,7 @@ function main() {
   ensureTarAvailable();
   fs.mkdirSync(outputDir, { recursive: true });
 
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relora-release-bundle-"));
+  const tempRoot = fs.mkdtempSync(path.join(outputDir, ".bundle-tmp-"));
   try {
     const stagingDir = path.join(tempRoot, `relora-v${version}-${target.platform}-${target.arch}`);
     fs.mkdirSync(stagingDir, { recursive: true });
@@ -50,8 +50,9 @@ function main() {
       }
     }
 
-    const tar = spawnSync("tar", ["-czf", outputPath, "-C", tempRoot, path.basename(stagingDir)], {
+    const tar = spawnSync("tar", ["-czf", assetName, "-C", path.basename(tempRoot), path.basename(stagingDir)], {
       encoding: "utf8",
+      cwd: outputDir,
     });
     if (tar.status !== 0) {
       throw new Error(tar.stderr.trim() || "Failed to create release bundle.");
@@ -74,7 +75,7 @@ function parseArgs(argv) {
     if (!current.startsWith("--")) {
       continue;
     }
-    const key = current.slice(2);
+    const key = normalizeArgKey(current.slice(2));
     const value = argv[index + 1];
     if (!value || value.startsWith("--")) {
       args[key] = true;
@@ -84,6 +85,10 @@ function parseArgs(argv) {
     index += 1;
   }
   return args;
+}
+
+function normalizeArgKey(key) {
+  return key.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
 }
 
 function printHelp(error) {

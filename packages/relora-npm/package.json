@@ -1,0 +1,36 @@
+{
+  "name": "relora",
+  "version": "0.0.0",
+  "description": "Keyboard-first terminal database workspace for PostgreSQL, MySQL/MariaDB, and SQLite.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/murongg/relora.git"
+  },
+  "homepage": "https://github.com/murongg/relora",
+  "bugs": {
+    "url": "https://github.com/murongg/relora/issues"
+  },
+  "bin": {
+    "relora": "./bin/relora.js"
+  },
+  "files": [
+    "README.md",
+    "bin",
+    "scripts"
+  ],
+  "scripts": {
+    "postinstall": "node ./scripts/postinstall.cjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "database",
+    "postgres",
+    "mysql",
+    "sqlite",
+    "tui",
+    "terminal",
+    "ratatui"
+  ]
+}

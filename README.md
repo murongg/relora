@@ -70,11 +70,66 @@ Support is provided through external sidecar drivers:
 
 The main Relora binary does not link database client drivers directly.
 
+## Install
+
+### npm
+
+For end users, the easiest path is npm:
+
+```bash
+npm install -g relora
+relora
+```
+
+The npm package downloads a prebuilt Relora bundle for the current platform from GitHub Releases, including:
+
+- `relora`
+- `relora-driver-postgres`
+- `relora-driver-mysql`
+- `relora-driver-sqlite`
+
+You can also launch it without a global install:
+
+```bash
+npx relora
+```
+
+### curl (macOS / Linux)
+
+If you prefer a single shell installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/murongg/relora/main/scripts/install.sh | sh
+```
+
+The installer downloads the matching prebuilt release bundle into `~/.local/bin` by default.
+
+Useful overrides:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/murongg/relora/main/scripts/install.sh | RELORA_VERSION=0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/murongg/relora/main/scripts/install.sh | RELORA_INSTALL_DIR=/usr/local/bin sh
+```
+
+### From source
+
+For contributors and local development, the source workflow is still:
+
+```bash
+cargo run -p relora
+```
+
 ## How to Use Relora
 
 ### 1. Start Relora
 
 Open the launcher:
+
+```bash
+relora
+```
+
+Or from source:
 
 ```bash
 cargo run -p relora
@@ -220,6 +275,8 @@ From the data grid:
 
 Relora does not run `cargo install` inside the TUI. End users should not need a Rust toolchain.
 
+For npm installs, sidecars are bundled into the downloaded runtime package automatically.
+
 Driver lookup order:
 
 - `RELORA_POSTGRES_DRIVER` / `RELORA_MYSQL_DRIVER` / `RELORA_SQLITE_DRIVER`
@@ -246,6 +303,10 @@ cargo run -p relora -- --help
 .
 ├── apps/
 │   └── relora/
+├── packages/
+│   └── relora-npm/
+├── scripts/
+│   └── package-release-bundle.cjs
 └── crates/
     ├── relora-app/
     ├── relora-core/
@@ -257,6 +318,8 @@ cargo run -p relora -- --help
 ### Package responsibilities
 
 - `apps/relora`: executable app, CLI config, sidecar registry, TUI shell, and `ratatui` rendering
+- `packages/relora-npm`: npm installer package that downloads prebuilt Relora bundles
+- `scripts/package-release-bundle.cjs`: helper for creating versioned release bundles for npm installs
 - `crates/relora-app`: application state, workspace projection, SQL editor state, CRUD helpers, read-only UI views
 - `crates/relora-core`: shared database traits and domain models
 - `crates/relora-driver-postgres`: PostgreSQL sidecar
@@ -268,4 +331,13 @@ cargo run -p relora -- --help
 ```bash
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
+```
+
+### Build an npm release bundle
+
+After building release binaries, package them into the versioned archive expected by the npm installer:
+
+```bash
+cargo build --release -p relora -p relora-driver-postgres -p relora-driver-mysql -p relora-driver-sqlite
+node scripts/package-release-bundle.cjs --platform darwin --arch arm64
 ```

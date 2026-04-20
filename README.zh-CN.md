@@ -70,11 +70,66 @@ Relora 当前支持：
 
 Relora 主程序本身不会直接链接数据库客户端 driver。
 
+## 安装方式
+
+### npm
+
+对终端用户来说，最简单的安装方式是 npm：
+
+```bash
+npm install -g relora
+relora
+```
+
+npm 包会在安装阶段从 GitHub Releases 下载当前平台对应的预编译 Relora bundle，其中包含：
+
+- `relora`
+- `relora-driver-postgres`
+- `relora-driver-mysql`
+- `relora-driver-sqlite`
+
+也可以不全局安装，直接运行：
+
+```bash
+npx relora
+```
+
+### curl（macOS / Linux）
+
+如果你更喜欢一条 shell 命令安装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/murongg/relora/main/scripts/install.sh | sh
+```
+
+安装脚本默认会把当前平台匹配的预编译 release bundle 下载到 `~/.local/bin`。
+
+常用覆盖参数：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/murongg/relora/main/scripts/install.sh | RELORA_VERSION=0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/murongg/relora/main/scripts/install.sh | RELORA_INSTALL_DIR=/usr/local/bin sh
+```
+
+### 源码方式
+
+对贡献者和本地开发来说，源码启动方式仍然是：
+
+```bash
+cargo run -p relora
+```
+
 ## 怎么使用 Relora
 
 ### 1. 启动 Relora
 
 打开启动页：
+
+```bash
+relora
+```
+
+或者从源码启动：
 
 ```bash
 cargo run -p relora
@@ -220,6 +275,8 @@ cargo run -p relora
 
 Relora 不会在 TUI 里运行 `cargo install`。对终端用户来说，不应该要求本机先安装 Rust toolchain。
 
+如果通过 npm 安装，sidecar 会跟随下载的 runtime bundle 一起落到本地，不需要单独安装。
+
 当前 driver 查找顺序：
 
 - `RELORA_POSTGRES_DRIVER` / `RELORA_MYSQL_DRIVER` / `RELORA_SQLITE_DRIVER`
@@ -246,6 +303,10 @@ cargo run -p relora -- --help
 .
 ├── apps/
 │   └── relora/
+├── packages/
+│   └── relora-npm/
+├── scripts/
+│   └── package-release-bundle.cjs
 └── crates/
     ├── relora-app/
     ├── relora-core/
@@ -257,6 +318,8 @@ cargo run -p relora -- --help
 ### 各包职责
 
 - `apps/relora`：可执行程序、CLI 配置、sidecar registry、TUI shell 与 `ratatui` 渲染
+- `packages/relora-npm`：npm 安装器包，负责下载预编译 Relora bundle
+- `scripts/package-release-bundle.cjs`：生成 npm / release 用版本化 bundle 的辅助脚本
 - `crates/relora-app`：应用状态、workspace 投影、SQL 编辑器状态、CRUD 工具、只读 UI 视图
 - `crates/relora-core`：共享数据库 trait 与领域模型
 - `crates/relora-driver-postgres`：PostgreSQL sidecar
@@ -268,4 +331,13 @@ cargo run -p relora -- --help
 ```bash
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
+```
+
+### 构建 npm release bundle
+
+在构建 release 二进制之后，可以用下面的脚本打出 npm 安装器所需的版本化 bundle：
+
+```bash
+cargo build --release -p relora -p relora-driver-postgres -p relora-driver-mysql -p relora-driver-sqlite
+node scripts/package-release-bundle.cjs --platform darwin --arch arm64
 ```

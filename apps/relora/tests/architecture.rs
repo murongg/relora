@@ -112,6 +112,59 @@ fn tui_runtime_is_split_into_modules() {
 }
 
 #[test]
+fn npm_installer_package_exists_for_binary_distribution() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let npm_package = repo_root.join("packages/relora-npm/package.json");
+    let npm_wrapper = repo_root.join("packages/relora-npm/bin/relora.js");
+    let npm_install = repo_root.join("packages/relora-npm/scripts/postinstall.cjs");
+    let release_bundle = repo_root.join("scripts/package-release-bundle.cjs");
+    let curl_install = repo_root.join("scripts/install.sh");
+
+    for path in [
+        &npm_package,
+        &npm_wrapper,
+        &npm_install,
+        &release_bundle,
+        &curl_install,
+    ] {
+        assert!(path.exists(), "expected {:?} to exist", path);
+    }
+
+    let package_source =
+        fs::read_to_string(&npm_package).expect("npm package manifest should be readable");
+    assert!(
+        package_source.contains("\"name\": \"relora\""),
+        "npm package should publish under the expected name"
+    );
+    assert!(
+        package_source.contains("\"relora\": \"./bin/relora.js\""),
+        "npm package should expose the relora binary entrypoint"
+    );
+
+    let install_source =
+        fs::read_to_string(&npm_install).expect("npm install script should be readable");
+    assert!(
+        install_source.contains("releases/download"),
+        "postinstall should download release bundles from GitHub releases"
+    );
+    assert!(
+        install_source.contains("relora-v"),
+        "postinstall should resolve versioned Relora bundle asset names"
+    );
+
+    let curl_source =
+        fs::read_to_string(&curl_install).expect("curl install script should be readable");
+    assert!(
+        curl_source.contains("releases/download"),
+        "curl install should download release bundles from GitHub releases"
+    );
+    assert!(
+        curl_source.contains("RELORA_INSTALL_DIR"),
+        "curl install should support configurable install directories"
+    );
+}
+
+#[test]
 fn tui_layout_metrics_are_defined_in_the_metrics_module() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tui");
     let metrics = root.join("metrics.rs");

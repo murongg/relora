@@ -216,7 +216,7 @@ cargo run -p relora
 打开 SQL 编辑器的方式：
 
 - `F3`
-- `Ctrl-2`
+- `Alt-2`
 - 或在浏览区按 `e`
 
 进入之后可以：
@@ -232,7 +232,7 @@ cargo run -p relora
 在数据表格中：
 
 1. 移动到目标 cell
-2. 按 `e`
+2. 按 `i`
 3. 输入新值
 4. 按 `Enter` 预览自动生成的 SQL
 5. 在 SQL tab 中按 `Ctrl-G` 提交 staged transaction
@@ -242,9 +242,9 @@ cargo run -p relora
 ### 全局
 
 - `Tab` / `Shift-Tab`：在 pane 之间切焦点
-- `F2` / `Ctrl-1`：切到 `Data`
-- `F3` / `Ctrl-2`：切到 `SQL`
-- `F4` / `Ctrl-3`：切到 `Structure`
+- `F2` 或 `Alt-1`：切到 `Data`
+- `F3` 或 `Alt-2`：切到 `SQL`
+- `F4` 或 `Alt-3`：切到 `Structure`
 - `Ctrl-P`：命令面板
 - `F10` / `Ctrl-R`：SQL history
 
@@ -253,7 +253,7 @@ cargo run -p relora
 - `j` / `k` 或方向键上下：移动选择
 - `Enter`、`Space`、`h`、`l`、左右方向键：展开 / 折叠
 - `e`：打开 SQL 编辑器
-- `s` / `i` / `u` / `x`：生成 CRUD 模板
+- `s` / `i` / `u` / `d`：生成 CRUD 模板
 - `r`：刷新
 - `c`：取消任务
 
@@ -262,11 +262,12 @@ cargo run -p relora
 - `j` / `k`：移动行
 - `h` / `l`：移动列
 - `PageUp` / `PageDown`：按页滚动
-- `N` / `P`：下一页 / 上一页预览
+- `n` / `p`：下一页 / 上一页预览
 - `y`：复制当前 row
 - `Y`：复制当前 cell
 - `w`：复制 `WHERE` 条件
-- `e`：编辑当前 cell
+- `i`：编辑当前 cell
+- `f` / `F`：冻结列 / 清除冻结列
 
 ### SQL 编辑器
 

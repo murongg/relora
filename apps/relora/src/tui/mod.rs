@@ -8,10 +8,14 @@ use arboard::Clipboard;
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-        KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEvent, MouseEventKind,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+        supports_keyboard_enhancement,
+    },
 };
 use ratatui::{
     Frame, Terminal,
@@ -200,7 +204,22 @@ pub fn run(config: AppConfig) -> Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let keyboard_enhancement_enabled = matches!(supports_keyboard_enhancement(), Ok(true));
+    if keyboard_enhancement_enabled {
+        execute!(
+            stdout,
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+            )
+        )?;
+    } else {
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let mut clipboard = SystemClipboard::new().ok();
@@ -214,11 +233,20 @@ pub fn run(config: AppConfig) -> Result<()> {
     );
 
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        DisableMouseCapture,
-        LeaveAlternateScreen
-    )?;
+    if keyboard_enhancement_enabled {
+        execute!(
+            terminal.backend_mut(),
+            PopKeyboardEnhancementFlags,
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        )?;
+    } else {
+        execute!(
+            terminal.backend_mut(),
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        )?;
+    }
     terminal.show_cursor()?;
 
     run_result

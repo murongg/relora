@@ -441,3 +441,23 @@ fn tui_colors_are_defined_only_in_the_colors_module() {
         );
     }
 }
+
+#[test]
+fn tui_runtime_enables_keyboard_enhancement_for_modified_enter_keys() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tui");
+    let runtime = root.join("mod.rs");
+    let source = fs::read_to_string(&runtime).expect("tui runtime module should be readable");
+
+    for expected in [
+        "supports_keyboard_enhancement",
+        "PushKeyboardEnhancementFlags",
+        "PopKeyboardEnhancementFlags",
+        "KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES",
+        "KeyboardEnhancementFlags::REPORT_EVENT_TYPES",
+    ] {
+        assert!(
+            source.contains(expected),
+            "tui runtime should contain {expected} so modified enter keys are reported distinctly"
+        );
+    }
+}

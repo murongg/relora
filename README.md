@@ -216,7 +216,7 @@ After launching a connection:
 Open the SQL editor with:
 
 - `F3`
-- `Ctrl-2`
+- `Alt-2`
 - or `e` from the browser
 
 From there you can:
@@ -232,7 +232,7 @@ From there you can:
 From the data grid:
 
 1. move to a cell
-2. press `e`
+2. press `i`
 3. enter the new value
 4. press `Enter` to preview the generated SQL
 5. press `Ctrl-G` in the SQL tab to commit the staged transaction
@@ -242,9 +242,9 @@ From the data grid:
 ### Global
 
 - `Tab` / `Shift-Tab`: switch focus between panes
-- `F2` / `Ctrl-1`: open `Data`
-- `F3` / `Ctrl-2`: open `SQL`
-- `F4` / `Ctrl-3`: open `Structure`
+- `F2` or `Alt-1`: open `Data`
+- `F3` or `Alt-2`: open `SQL`
+- `F4` or `Alt-3`: open `Structure`
 - `Ctrl-P`: command palette
 - `F10` / `Ctrl-R`: SQL history
 
@@ -253,7 +253,7 @@ From the data grid:
 - `j` / `k` or `Up` / `Down`: move selection
 - `Enter`, `Space`, `h`, `l`, `Left`, `Right`: expand or collapse
 - `e`: open SQL editor
-- `s` / `i` / `u` / `x`: generate CRUD templates
+- `s` / `i` / `u` / `d`: generate CRUD templates
 - `r`: refresh
 - `c`: cancel tasks
 
@@ -262,11 +262,12 @@ From the data grid:
 - `j` / `k`: move rows
 - `h` / `l`: move columns
 - `PageUp` / `PageDown`: scroll by page
-- `N` / `P`: next / previous preview page
+- `n` / `p`: next / previous preview page
 - `y`: copy row
 - `Y`: copy cell
 - `w`: copy `WHERE` clause
-- `e`: stage cell edit
+- `i`: stage cell edit
+- `f` / `F`: freeze columns / clear frozen columns
 
 ### SQL editor
 

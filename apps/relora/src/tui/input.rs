@@ -316,17 +316,21 @@ pub(super) fn map_right_tab_key_to_action(key: KeyEvent) -> Option<WorkspaceActi
         KeyCode::F(FKEY_TAB_DATA) => Some(WorkspaceAction::SelectRightDataTab),
         KeyCode::F(FKEY_TAB_SQL) => Some(WorkspaceAction::SelectRightSqlTab),
         KeyCode::F(FKEY_TAB_STRUCTURE) => Some(WorkspaceAction::SelectRightStructureTab),
-        KeyCode::Char(KEY_CTRL_TAB_DATA) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char(KEY_ALT_TAB_DATA) if is_tab_digit_modifier(key.modifiers) => {
             Some(WorkspaceAction::SelectRightDataTab)
         }
-        KeyCode::Char(KEY_CTRL_TAB_SQL) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char(KEY_ALT_TAB_SQL) if is_tab_digit_modifier(key.modifiers) => {
             Some(WorkspaceAction::SelectRightSqlTab)
         }
-        KeyCode::Char(KEY_CTRL_TAB_STRUCTURE) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char(KEY_ALT_TAB_STRUCTURE) if is_tab_digit_modifier(key.modifiers) => {
             Some(WorkspaceAction::SelectRightStructureTab)
         }
         _ => None,
     }
+}
+
+fn is_tab_digit_modifier(modifiers: KeyModifiers) -> bool {
+    modifiers == KeyModifiers::ALT
 }
 
 pub(super) fn handle_delete_confirmation_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
@@ -572,9 +576,7 @@ pub(super) fn map_editor_control_key_to_action(key: KeyEvent) -> Option<Workspac
     }
 
     match key.code {
-        KeyCode::Enter | KeyCode::Char('m' | 'M' | 'j' | 'J') | KeyCode::Char('\n' | '\r') => {
-            Some(WorkspaceAction::ExecuteEditor)
-        }
+        KeyCode::Enter => Some(WorkspaceAction::ExecuteEditor),
         KeyCode::Char(KEY_EDITOR_NEW_TAB) => Some(WorkspaceAction::NewEditorTab),
         KeyCode::Char(KEY_EDITOR_CLOSE_TAB) => Some(WorkspaceAction::CloseEditorTab),
         KeyCode::Char(KEY_EDITOR_CANCEL_TASKS) => Some(WorkspaceAction::CancelTasks),

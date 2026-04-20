@@ -377,25 +377,38 @@ fn bracket_segment_center(strip: &str, start_x: u16, target_index: usize) -> Opt
 }
 
 #[test]
-fn editor_control_enter_aliases_execute_sql() {
-    for code in [KeyCode::Enter, KeyCode::Char('m'), KeyCode::Char('j')] {
+fn editor_control_enter_executes_sql_without_legacy_aliases() {
+    assert_eq!(
+        map_editor_control_key_to_action(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)),
+        Some(WorkspaceAction::ExecuteEditor)
+    );
+    for code in [KeyCode::Char('m'), KeyCode::Char('j')] {
         let key = KeyEvent::new(code, KeyModifiers::CONTROL);
-        assert_eq!(
-            map_editor_control_key_to_action(key),
-            Some(WorkspaceAction::ExecuteEditor)
-        );
+        assert_eq!(map_editor_control_key_to_action(key), None);
     }
 }
 
 #[test]
 fn right_tab_keys_include_structure_tab() {
     assert_eq!(
+        map_right_tab_key_to_action(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE)),
+        Some(WorkspaceAction::SelectRightDataTab)
+    );
+    assert_eq!(
+        map_right_tab_key_to_action(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::ALT)),
+        Some(WorkspaceAction::SelectRightSqlTab)
+    );
+    assert_eq!(
         map_right_tab_key_to_action(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE)),
         Some(WorkspaceAction::SelectRightStructureTab)
     );
     assert_eq!(
-        map_right_tab_key_to_action(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::CONTROL)),
+        map_right_tab_key_to_action(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::ALT)),
         Some(WorkspaceAction::SelectRightStructureTab)
+    );
+    assert_eq!(
+        map_right_tab_key_to_action(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::CONTROL)),
+        None
     );
 }
 
@@ -422,16 +435,28 @@ fn data_grid_shortcuts_include_copy_filter_and_edit_actions() {
         Some(WorkspaceAction::CopyCurrentWhereClause)
     );
     assert_eq!(
-        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)),
+        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE)),
         Some(WorkspaceAction::StartCellEdit)
     );
     assert_eq!(
-        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT)),
+        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)),
+        None
+    );
+    assert_eq!(
+        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)),
         Some(WorkspaceAction::NextPreviewPage)
     );
     assert_eq!(
-        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT)),
+        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT)),
+        None
+    );
+    assert_eq!(
+        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
         Some(WorkspaceAction::PreviousPreviewPage)
+    );
+    assert_eq!(
+        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT)),
+        None
     );
     assert_eq!(
         map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE)),
@@ -446,12 +471,44 @@ fn data_grid_shortcuts_include_copy_filter_and_edit_actions() {
         Some(WorkspaceAction::ResetSelectedGridColumnWidth)
     );
     assert_eq!(
-        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE)),
+        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE)),
         Some(WorkspaceAction::FreezeGridColumnsThroughSelection)
     );
     assert_eq!(
-        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::SHIFT)),
+        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE)),
+        None
+    );
+    assert_eq!(
+        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('F'), KeyModifiers::SHIFT)),
         Some(WorkspaceAction::ClearFrozenGridColumns)
+    );
+    assert_eq!(
+        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::SHIFT)),
+        None
+    );
+}
+
+#[test]
+fn browser_shortcuts_use_crud_mnemonics_for_templates() {
+    assert_eq!(
+        map_browser_key_to_action(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)),
+        Some(WorkspaceAction::OpenSelectTemplate)
+    );
+    assert_eq!(
+        map_browser_key_to_action(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE)),
+        Some(WorkspaceAction::OpenInsertTemplate)
+    );
+    assert_eq!(
+        map_browser_key_to_action(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE)),
+        Some(WorkspaceAction::OpenUpdateTemplate)
+    );
+    assert_eq!(
+        map_browser_key_to_action(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)),
+        Some(WorkspaceAction::OpenDeleteTemplate)
+    );
+    assert_eq!(
+        map_browser_key_to_action(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+        None
     );
 }
 
@@ -1934,7 +1991,7 @@ fn row_inspector_copy_and_edit_follow_the_selected_field() -> Result<()> {
 
     handle_key(
         &mut app,
-        KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
     )?;
     let edit = app
         .view()

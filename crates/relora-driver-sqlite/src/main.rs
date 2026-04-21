@@ -2,7 +2,7 @@ use std::io;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use relora_core::db::{DatabaseDriver, DbObjectRef};
+use relora_core::db::{DatabaseDriver, DbObjectKind, DbObjectRef};
 use relora_driver_sqlite::SqliteDriver;
 
 #[derive(Debug, Parser)]
@@ -23,6 +23,17 @@ struct Cli {
 enum DriverCommand {
     Capabilities,
     Catalog,
+    CatalogSummary,
+    SchemaObjects {
+        #[arg(long)]
+        database: String,
+
+        #[arg(long)]
+        schema: String,
+
+        #[arg(long, value_parser = parse_object_kind)]
+        kind: Option<DbObjectKind>,
+    },
     Preview {
         #[arg(long = "object", value_parser = parse_object)]
         object: DbObjectRef,
@@ -60,6 +71,21 @@ fn main() -> Result<()> {
             serde_json::to_writer(&mut output, &driver.capabilities())?;
         }
         DriverCommand::Catalog => serde_json::to_writer(&mut output, &driver.load_catalog()?)?,
+        DriverCommand::CatalogSummary => {
+            serde_json::to_writer(&mut output, &driver.load_catalog_summary()?)?
+        }
+        DriverCommand::SchemaObjects {
+            database,
+            schema,
+            kind,
+        } => {
+            let objects = if let Some(kind) = kind {
+                driver.load_schema_objects_of_kind(&database, &schema, kind)?
+            } else {
+                driver.load_schema_objects(&database, &schema)?
+            };
+            serde_json::to_writer(&mut output, &objects)?;
+        }
         DriverCommand::Preview {
             object,
             limit,
@@ -86,4 +112,8 @@ fn main() -> Result<()> {
 
 fn parse_object(value: &str) -> Result<DbObjectRef, serde_json::Error> {
     serde_json::from_str(value)
+}
+
+fn parse_object_kind(value: &str) -> Result<DbObjectKind, String> {
+    DbObjectKind::from_wire_name(value).ok_or_else(|| format!("unsupported object kind: {value}"))
 }

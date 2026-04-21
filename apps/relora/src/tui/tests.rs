@@ -8,8 +8,8 @@ use crate::launcher::{LauncherAction, LauncherApp, LauncherFormField};
 use anyhow::Result;
 use ratatui::backend::TestBackend;
 use relora_core::db::{
-    Catalog, DatabaseDriver, DatabaseEntry, DatabaseKind, DbColumn, DbObjectKind, DbObjectRef,
-    QueryResult, SchemaEntry, SqlExecutionResult, TablePreview,
+    Catalog, CatalogSummary, DatabaseDriver, DatabaseEntry, DatabaseKind, DbColumn, DbObjectKind,
+    DbObjectRef, QueryResult, SchemaEntry, SqlExecutionResult, TablePreview,
 };
 
 #[derive(Debug)]
@@ -79,6 +79,28 @@ impl DatabaseDriver for MockDriver {
             .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
     }
 
+    fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
+        self.catalogs
+            .front()
+            .cloned()
+            .map(CatalogSummary::from)
+            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
+    }
+
+    fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
+        self.catalogs
+            .front()
+            .and_then(|catalog| {
+                catalog
+                    .databases
+                    .iter()
+                    .find(|entry| entry.name == database)
+                    .and_then(|entry| entry.schemas.iter().find(|entry| entry.name == schema))
+                    .map(|entry| entry.objects.clone())
+            })
+            .ok_or_else(|| anyhow::anyhow!("missing mocked schema objects for {database}.{schema}"))
+    }
+
     fn load_preview_page(
         &mut self,
         _table: &DbObjectRef,
@@ -128,6 +150,28 @@ impl DatabaseDriver for BlockingPreviewDriver {
         self.catalogs
             .pop_front()
             .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
+    }
+
+    fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
+        self.catalogs
+            .front()
+            .cloned()
+            .map(CatalogSummary::from)
+            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
+    }
+
+    fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
+        self.catalogs
+            .front()
+            .and_then(|catalog| {
+                catalog
+                    .databases
+                    .iter()
+                    .find(|entry| entry.name == database)
+                    .and_then(|entry| entry.schemas.iter().find(|entry| entry.name == schema))
+                    .map(|entry| entry.objects.clone())
+            })
+            .ok_or_else(|| anyhow::anyhow!("missing mocked schema objects for {database}.{schema}"))
     }
 
     fn load_preview_page(
@@ -845,11 +889,18 @@ fn summary_renders_selected_database_context_for_multi_database_connections() ->
         .expect("views row should exist");
     app.select_tree_row_index(views_index)?;
     app.open_selected_tree_item_default()?;
+    for _ in 0..8 {
+        app.drain_background()?;
+        if app.tree_rows().iter().any(|row| row.label == "events") {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
     let events_index = app
         .tree_rows()
         .iter()
         .position(|row| row.label == "events")
-        .expect("events row should exist after expanding analytics");
+        .expect("events row should exist after lazy-loading analytics");
     app.select_tree_row_index(events_index)?;
     for _ in 0..8 {
         app.drain_background()?;

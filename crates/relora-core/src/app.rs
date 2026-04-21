@@ -1,4 +1,6 @@
-use crate::db::{Catalog, DatabaseDriver, DatabaseEntry, DbObjectRef, SchemaEntry, TablePreview};
+use crate::db::{
+    Catalog, DatabaseDriver, DatabaseEntry, DbObjectKind, DbObjectRef, SchemaEntry, TablePreview,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -51,12 +53,12 @@ pub struct App {
 }
 
 impl App {
-    pub fn bootstrap(
-        driver: &mut dyn DatabaseDriver,
+    pub fn from_catalog(
+        catalog: Catalog,
+        connection_label: impl Into<String>,
         preview_limit: usize,
-    ) -> anyhow::Result<Self> {
-        let catalog = driver.load_catalog()?;
-        let mut app = Self {
+    ) -> Self {
+        Self {
             focus: Focus::Schemas,
             catalog,
             selected_database: 0,
@@ -64,10 +66,18 @@ impl App {
             selected_object: 0,
             preview: TablePreview::default(),
             status: String::new(),
-            connection_label: driver.connection_label().to_string(),
+            connection_label: connection_label.into(),
             preview_limit: preview_limit.max(1),
             should_quit: false,
-        };
+        }
+    }
+
+    pub fn bootstrap(
+        driver: &mut dyn DatabaseDriver,
+        preview_limit: usize,
+    ) -> anyhow::Result<Self> {
+        let catalog = driver.load_catalog()?;
+        let mut app = Self::from_catalog(catalog, driver.connection_label(), preview_limit);
         app.sync_preview(driver);
         Ok(app)
     }
@@ -214,6 +224,30 @@ impl App {
         Ok(())
     }
 
+    pub fn select_schema_locally(
+        &mut self,
+        database_name: &str,
+        schema_name: &str,
+    ) -> anyhow::Result<()> {
+        let database_index = self
+            .catalog
+            .databases
+            .iter()
+            .position(|database| database.name == database_name)
+            .ok_or_else(|| anyhow::anyhow!("database not found: {database_name}"))?;
+
+        let schema_index = self.catalog.databases[database_index]
+            .schemas
+            .iter()
+            .position(|schema| schema.name == schema_name)
+            .ok_or_else(|| anyhow::anyhow!("schema not found: {database_name}.{schema_name}"))?;
+
+        self.selected_database = database_index;
+        self.selected_schema = schema_index;
+        self.selected_object = 0;
+        Ok(())
+    }
+
     pub fn replace_catalog(&mut self, catalog: Catalog) {
         let previous_database = self.selected_database_name().map(str::to_owned);
         let previous_schema = self.selected_schema_name().map(str::to_owned);
@@ -244,6 +278,101 @@ impl App {
                 })
             })
             .unwrap_or(0);
+    }
+
+    pub fn merge_schema_objects(
+        &mut self,
+        database_name: &str,
+        schema_name: &str,
+        objects: Vec<DbObjectRef>,
+    ) -> anyhow::Result<()> {
+        let previous_object = self.selected_object().cloned();
+        let database_index = self
+            .catalog
+            .databases
+            .iter()
+            .position(|database| database.name == database_name)
+            .ok_or_else(|| anyhow::anyhow!("database not found: {database_name}"))?;
+        let schema_index = self.catalog.databases[database_index]
+            .schemas
+            .iter()
+            .position(|schema| schema.name == schema_name)
+            .ok_or_else(|| anyhow::anyhow!("schema not found: {database_name}.{schema_name}"))?;
+
+        self.catalog.databases[database_index].schemas[schema_index].objects = objects;
+        if self.selected_database == database_index && self.selected_schema == schema_index {
+            self.selected_object = previous_object
+                .as_ref()
+                .and_then(|object| {
+                    self.catalog.databases[database_index].schemas[schema_index]
+                        .objects
+                        .iter()
+                        .position(|candidate| {
+                            candidate.database == object.database
+                                && candidate.schema == object.schema
+                                && candidate.name == object.name
+                                && candidate.kind == object.kind
+                        })
+                })
+                .unwrap_or(0);
+        }
+        Ok(())
+    }
+
+    pub fn merge_schema_objects_of_kind(
+        &mut self,
+        database_name: &str,
+        schema_name: &str,
+        kind: DbObjectKind,
+        objects: Vec<DbObjectRef>,
+    ) -> anyhow::Result<()> {
+        let previous_object = self.selected_object().cloned();
+        let database_index = self
+            .catalog
+            .databases
+            .iter()
+            .position(|database| database.name == database_name)
+            .ok_or_else(|| anyhow::anyhow!("database not found: {database_name}"))?;
+        let schema_index = self.catalog.databases[database_index]
+            .schemas
+            .iter()
+            .position(|schema| schema.name == schema_name)
+            .ok_or_else(|| anyhow::anyhow!("schema not found: {database_name}.{schema_name}"))?;
+
+        let schema_objects =
+            &mut self.catalog.databases[database_index].schemas[schema_index].objects;
+        schema_objects.retain(|object| object.kind != kind);
+        schema_objects.extend(objects.into_iter().filter(|object| object.kind == kind));
+
+        if self.selected_database == database_index && self.selected_schema == schema_index {
+            self.selected_object = previous_object
+                .as_ref()
+                .and_then(|object| {
+                    schema_objects.iter().position(|candidate| {
+                        candidate.database == object.database
+                            && candidate.schema == object.schema
+                            && candidate.name == object.name
+                            && candidate.kind == object.kind
+                    })
+                })
+                .unwrap_or(0);
+        }
+        Ok(())
+    }
+
+    pub fn objects_for_schema(
+        &self,
+        database_name: &str,
+        schema_name: &str,
+    ) -> Option<&[DbObjectRef]> {
+        self.catalog
+            .databases
+            .iter()
+            .find(|database| database.name == database_name)?
+            .schemas
+            .iter()
+            .find(|schema| schema.name == schema_name)
+            .map(|schema| schema.objects.as_slice())
     }
 
     pub fn clear_preview(&mut self) {

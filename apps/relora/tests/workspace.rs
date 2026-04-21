@@ -13,8 +13,9 @@ use anyhow::Result;
 use relora_app::view::RightPaneTab;
 use relora_app::workspace::{ConnectionBootstrap, WorkspaceAction, WorkspaceApp};
 use relora_core::db::{
-    Catalog, DatabaseDriver, DatabaseEntry, DatabaseKind, DbColumn, DbObjectKind, DbObjectRef,
-    QueryResult, SchemaEntry, SqlExecutionResult, TablePreview,
+    Catalog, CatalogSummary, DatabaseDriver, DatabaseEntry, DatabaseKind, DatabaseSummary,
+    DbColumn, DbObjectKind, DbObjectRef, ObjectKindCount, QueryResult, SchemaEntry, SchemaSummary,
+    SqlExecutionResult, TablePreview,
 };
 
 const BACKGROUND_WAIT_ATTEMPTS: usize = 200;
@@ -29,6 +30,7 @@ struct MockDriver {
     columns: VecDeque<Vec<DbColumn>>,
     executions: VecDeque<Vec<SqlExecutionResult>>,
     executed_sql: Arc<Mutex<Vec<String>>>,
+    active_catalog: Option<Catalog>,
 }
 
 impl MockDriver {
@@ -46,6 +48,7 @@ impl MockDriver {
             columns: VecDeque::from(columns),
             executions: VecDeque::from(executions),
             executed_sql: Arc::new(Mutex::new(Vec::new())),
+            active_catalog: None,
         }
     }
 
@@ -71,6 +74,7 @@ struct BlockingPreviewDriver {
     previews: VecDeque<TablePreview>,
     unblock_preview: Option<mpsc::Receiver<()>>,
     preview_calls: usize,
+    active_catalog: Option<Catalog>,
 }
 
 #[derive(Debug)]
@@ -82,6 +86,7 @@ struct BlockingCatalogDriver {
     catalog_calls: usize,
     catalog_call_counter: Option<Arc<AtomicUsize>>,
     catalog_wait_notifier: Option<mpsc::Sender<()>>,
+    active_catalog: Option<Catalog>,
 }
 
 struct TargetedBlockingDriver {
@@ -90,6 +95,15 @@ struct TargetedBlockingDriver {
     columns: BTreeMap<String, Vec<DbColumn>>,
     unblock_preview_for: Option<(String, mpsc::Receiver<()>)>,
     unblock_structure_for: Option<(String, mpsc::Receiver<()>)>,
+    active_catalog: Option<Catalog>,
+}
+
+#[derive(Debug)]
+struct LazyCatalogDriver {
+    summary: CatalogSummary,
+    previews: BTreeMap<String, TablePreview>,
+    schema_objects: BTreeMap<(String, String), Vec<DbObjectRef>>,
+    group_loads: Arc<Mutex<Vec<(String, String, DbObjectKind)>>>,
 }
 
 impl BlockingPreviewDriver {
@@ -103,6 +117,7 @@ impl BlockingPreviewDriver {
             previews: VecDeque::from(previews),
             unblock_preview: Some(unblock_preview),
             preview_calls: 0,
+            active_catalog: None,
         }
     }
 }
@@ -122,6 +137,7 @@ impl BlockingCatalogDriver {
             catalog_calls: 0,
             catalog_call_counter: None,
             catalog_wait_notifier: None,
+            active_catalog: None,
         }
     }
 
@@ -154,6 +170,7 @@ impl TargetedBlockingDriver {
                 .collect(),
             unblock_preview_for: None,
             unblock_structure_for: None,
+            active_catalog: None,
         }
     }
 
@@ -168,6 +185,33 @@ impl TargetedBlockingDriver {
     }
 }
 
+impl LazyCatalogDriver {
+    fn new(
+        summary: CatalogSummary,
+        previews: &[(&str, TablePreview)],
+        schema_objects: &[((&str, &str), Vec<DbObjectRef>)],
+        group_loads: Arc<Mutex<Vec<(String, String, DbObjectKind)>>>,
+    ) -> Self {
+        Self {
+            summary,
+            previews: previews
+                .iter()
+                .map(|(name, preview)| ((*name).to_string(), preview.clone()))
+                .collect(),
+            schema_objects: schema_objects
+                .iter()
+                .map(|((database, schema), objects)| {
+                    (
+                        ((*database).to_string(), (*schema).to_string()),
+                        objects.clone(),
+                    )
+                })
+                .collect(),
+            group_loads,
+        }
+    }
+}
+
 impl DatabaseDriver for MockDriver {
     fn kind(&self) -> DatabaseKind {
         self.kind
@@ -178,9 +222,36 @@ impl DatabaseDriver for MockDriver {
     }
 
     fn load_catalog(&mut self) -> Result<Catalog> {
-        self.catalogs
+        let catalog = self
+            .catalogs
             .pop_front()
-            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
+            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))?;
+        self.active_catalog = Some(catalog.clone());
+        Ok(catalog)
+    }
+
+    fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
+        let catalog = self
+            .catalogs
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))?;
+        let summary = CatalogSummary::from(&catalog);
+        self.active_catalog = Some(catalog);
+        Ok(summary)
+    }
+
+    fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
+        self.active_catalog
+            .as_ref()
+            .and_then(|catalog| {
+                catalog
+                    .databases
+                    .iter()
+                    .find(|entry| entry.name == database)
+                    .and_then(|entry| entry.schemas.iter().find(|entry| entry.name == schema))
+                    .map(|entry| entry.objects.clone())
+            })
+            .ok_or_else(|| anyhow::anyhow!("missing mocked schema objects for {database}.{schema}"))
     }
 
     fn load_preview_page(
@@ -237,9 +308,36 @@ impl DatabaseDriver for BlockingPreviewDriver {
     }
 
     fn load_catalog(&mut self) -> Result<Catalog> {
-        self.catalogs
+        let catalog = self
+            .catalogs
             .pop_front()
-            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
+            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))?;
+        self.active_catalog = Some(catalog.clone());
+        Ok(catalog)
+    }
+
+    fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
+        let catalog = self
+            .catalogs
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))?;
+        let summary = CatalogSummary::from(&catalog);
+        self.active_catalog = Some(catalog);
+        Ok(summary)
+    }
+
+    fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
+        self.active_catalog
+            .as_ref()
+            .and_then(|catalog| {
+                catalog
+                    .databases
+                    .iter()
+                    .find(|entry| entry.name == database)
+                    .and_then(|entry| entry.schemas.iter().find(|entry| entry.name == schema))
+                    .map(|entry| entry.objects.clone())
+            })
+            .ok_or_else(|| anyhow::anyhow!("missing mocked schema objects for {database}.{schema}"))
     }
 
     fn load_preview_page(
@@ -315,6 +413,45 @@ impl DatabaseDriver for BlockingCatalogDriver {
             .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
     }
 
+    fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
+        self.catalog_calls += 1;
+        if let Some(counter) = &self.catalog_call_counter {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
+        if self.catalog_calls > 1 {
+            if let Some(notifier) = self.catalog_wait_notifier.take() {
+                let _ = notifier.send(());
+            }
+            if let Some(receiver) = self.unblock_catalog.take() {
+                receiver
+                    .recv()
+                    .map_err(|_| anyhow::anyhow!("catalog unblock signal was dropped"))?;
+            }
+        }
+
+        let catalog = self
+            .catalogs
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))?;
+        let summary = CatalogSummary::from(&catalog);
+        self.active_catalog = Some(catalog);
+        Ok(summary)
+    }
+
+    fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
+        self.active_catalog
+            .as_ref()
+            .and_then(|catalog| {
+                catalog
+                    .databases
+                    .iter()
+                    .find(|entry| entry.name == database)
+                    .and_then(|entry| entry.schemas.iter().find(|entry| entry.name == schema))
+                    .map(|entry| entry.objects.clone())
+            })
+            .ok_or_else(|| anyhow::anyhow!("missing mocked schema objects for {database}.{schema}"))
+    }
+
     fn load_preview_page(
         &mut self,
         _table: &DbObjectRef,
@@ -361,9 +498,36 @@ impl DatabaseDriver for TargetedBlockingDriver {
     }
 
     fn load_catalog(&mut self) -> Result<Catalog> {
-        self.catalogs
+        let catalog = self
+            .catalogs
             .pop_front()
-            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
+            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))?;
+        self.active_catalog = Some(catalog.clone());
+        Ok(catalog)
+    }
+
+    fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
+        let catalog = self
+            .catalogs
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))?;
+        let summary = CatalogSummary::from(&catalog);
+        self.active_catalog = Some(catalog);
+        Ok(summary)
+    }
+
+    fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
+        self.active_catalog
+            .as_ref()
+            .and_then(|catalog| {
+                catalog
+                    .databases
+                    .iter()
+                    .find(|entry| entry.name == database)
+                    .and_then(|entry| entry.schemas.iter().find(|entry| entry.name == schema))
+                    .map(|entry| entry.objects.clone())
+            })
+            .ok_or_else(|| anyhow::anyhow!("missing mocked schema objects for {database}.{schema}"))
     }
 
     fn load_preview_page(
@@ -417,6 +581,82 @@ impl DatabaseDriver for TargetedBlockingDriver {
             .get(&table.name)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("missing mocked columns for {}", table.name))
+    }
+
+    fn execute_sql(
+        &mut self,
+        _database: Option<&str>,
+        _sql: &str,
+    ) -> Result<Vec<SqlExecutionResult>> {
+        Err(anyhow::anyhow!("sql execution is not used in this test"))
+    }
+}
+
+impl DatabaseDriver for LazyCatalogDriver {
+    fn kind(&self) -> DatabaseKind {
+        DatabaseKind::Postgres
+    }
+
+    fn connection_label(&self) -> &str {
+        "mock://postgres"
+    }
+
+    fn load_catalog(&mut self) -> Result<Catalog> {
+        Ok(self.summary.as_catalog_with_unloaded_objects())
+    }
+
+    fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
+        Ok(self.summary.clone())
+    }
+
+    fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
+        self.schema_objects
+            .get(&(database.to_string(), schema.to_string()))
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing mocked schema objects for {database}.{schema}"))
+    }
+
+    fn load_schema_objects_of_kind(
+        &mut self,
+        database: &str,
+        schema: &str,
+        kind: DbObjectKind,
+    ) -> Result<Vec<DbObjectRef>> {
+        self.group_loads
+            .lock()
+            .expect("group loads recorder should be available")
+            .push((database.to_string(), schema.to_string(), kind));
+        Ok(self
+            .load_schema_objects(database, schema)?
+            .into_iter()
+            .filter(|object| object.kind == kind)
+            .collect())
+    }
+
+    fn load_preview_page(
+        &mut self,
+        table: &DbObjectRef,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<TablePreview> {
+        self.previews
+            .get(&table.name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing mocked preview for {}", table.name))
+    }
+
+    fn load_filtered_preview_page(
+        &mut self,
+        table: &DbObjectRef,
+        _filter: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<TablePreview> {
+        self.load_preview_page(table, limit, offset)
+    }
+
+    fn load_object_columns(&mut self, _table: &DbObjectRef) -> Result<Vec<DbColumn>> {
+        Ok(Vec::new())
     }
 
     fn execute_sql(
@@ -498,6 +738,28 @@ fn preview(columns: &[&str], rows: &[&[&str]]) -> TablePreview {
             .iter()
             .map(|row| row.iter().map(|value| (*value).to_string()).collect())
             .collect(),
+    }
+}
+
+fn summary_catalog(schema_counts: &[(&str, &[(DbObjectKind, usize)])]) -> CatalogSummary {
+    CatalogSummary {
+        databases: vec![DatabaseSummary {
+            name: "postgres".to_string(),
+            schemas: schema_counts
+                .iter()
+                .map(|(schema, counts)| SchemaSummary {
+                    database: "postgres".to_string(),
+                    name: (*schema).to_string(),
+                    object_counts: counts
+                        .iter()
+                        .map(|(kind, count)| ObjectKindCount {
+                            kind: *kind,
+                            count: *count,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }],
     }
 }
 
@@ -627,6 +889,201 @@ fn workspace_bootstrap_builds_a_multi_connection_asset_tree() -> Result<()> {
     assert!(labels.contains(&"analytics".to_string()));
     assert!(labels.contains(&"Tables".to_string()));
     assert_eq!(workspace.selected_row().label, "users");
+    Ok(())
+}
+
+#[test]
+fn workspace_bootstrap_loads_only_the_first_schema_and_expands_other_schemas_lazily() -> Result<()>
+{
+    let group_loads = Arc::new(Mutex::new(Vec::new()));
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(LazyCatalogDriver::new(
+            summary_catalog(&[
+                ("public", &[(DbObjectKind::Table, 2)]),
+                ("analytics", &[(DbObjectKind::View, 1)]),
+            ]),
+            &[
+                ("users", preview(&["id"], &[&["1"]])),
+                ("events", preview(&["ts"], &[&["2026-04-21T00:00:00Z"]])),
+            ],
+            &[
+                (
+                    ("postgres", "public"),
+                    vec![
+                        DbObjectRef {
+                            database: "postgres".to_string(),
+                            schema: "public".to_string(),
+                            name: "users".to_string(),
+                            kind: DbObjectKind::Table,
+                        },
+                        DbObjectRef {
+                            database: "postgres".to_string(),
+                            schema: "public".to_string(),
+                            name: "orders".to_string(),
+                            kind: DbObjectKind::Table,
+                        },
+                    ],
+                ),
+                (
+                    ("postgres", "analytics"),
+                    vec![DbObjectRef {
+                        database: "postgres".to_string(),
+                        schema: "analytics".to_string(),
+                        name: "events".to_string(),
+                        kind: DbObjectKind::View,
+                    }],
+                ),
+            ],
+            group_loads.clone(),
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+
+    assert_eq!(
+        group_loads
+            .lock()
+            .expect("group loads should be recorded")
+            .clone(),
+        vec![(
+            "postgres".to_string(),
+            "public".to_string(),
+            DbObjectKind::Table
+        )]
+    );
+    assert!(workspace.tree_rows().iter().any(|row| row.label == "users"));
+    assert!(
+        !workspace
+            .tree_rows()
+            .iter()
+            .any(|row| row.label == "events")
+    );
+
+    let analytics_index = tree_row_index(&workspace, "analytics");
+    workspace.select_tree_row_index(analytics_index)?;
+    workspace.open_selected_tree_item_default()?;
+    let views_index = tree_row_index(&workspace, "Views");
+    workspace.select_tree_row_index(views_index)?;
+    workspace.open_selected_tree_item_default()?;
+    drain_until(
+        &mut workspace,
+        |workspace| {
+            workspace
+                .tree_rows()
+                .iter()
+                .any(|row| row.label == "events")
+        },
+        "the lazily loaded analytics objects",
+    )?;
+
+    let loads = group_loads
+        .lock()
+        .expect("group loads should be recorded")
+        .clone();
+    assert_eq!(
+        loads,
+        vec![
+            (
+                "postgres".to_string(),
+                "public".to_string(),
+                DbObjectKind::Table
+            ),
+            (
+                "postgres".to_string(),
+                "analytics".to_string(),
+                DbObjectKind::View
+            )
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_bootstrap_loads_only_the_first_object_group_and_expands_other_groups_lazily()
+-> Result<()> {
+    let group_loads = Arc::new(Mutex::new(Vec::new()));
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(LazyCatalogDriver::new(
+            summary_catalog(&[(
+                "public",
+                &[(DbObjectKind::Table, 2), (DbObjectKind::View, 1)],
+            )]),
+            &[
+                ("users", preview(&["id"], &[&["1"]])),
+                ("active_users", preview(&["id"], &[&["1"]])),
+            ],
+            &[(
+                ("postgres", "public"),
+                vec![
+                    DbObjectRef {
+                        database: "postgres".to_string(),
+                        schema: "public".to_string(),
+                        name: "users".to_string(),
+                        kind: DbObjectKind::Table,
+                    },
+                    DbObjectRef {
+                        database: "postgres".to_string(),
+                        schema: "public".to_string(),
+                        name: "orders".to_string(),
+                        kind: DbObjectKind::Table,
+                    },
+                    DbObjectRef {
+                        database: "postgres".to_string(),
+                        schema: "public".to_string(),
+                        name: "active_users".to_string(),
+                        kind: DbObjectKind::View,
+                    },
+                ],
+            )],
+            group_loads.clone(),
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    assert!(workspace.tree_rows().iter().any(|row| row.label == "users"));
+
+    let views_index = tree_row_index(&workspace, "Views");
+    workspace.select_tree_row_index(views_index)?;
+    workspace.open_selected_tree_item_default()?;
+    assert!(
+        !workspace
+            .tree_rows()
+            .iter()
+            .any(|row| row.label == "active_users"),
+        "views should not be visible until the Views group has been loaded"
+    );
+
+    drain_until(
+        &mut workspace,
+        |workspace| {
+            workspace
+                .tree_rows()
+                .iter()
+                .any(|row| row.label == "active_users")
+        },
+        "the lazily loaded view group",
+    )?;
+
+    assert_eq!(
+        group_loads
+            .lock()
+            .expect("group loads should be recorded")
+            .clone(),
+        vec![
+            (
+                "postgres".to_string(),
+                "public".to_string(),
+                DbObjectKind::Table
+            ),
+            (
+                "postgres".to_string(),
+                "public".to_string(),
+                DbObjectKind::View
+            )
+        ]
+    );
     Ok(())
 }
 
@@ -1405,6 +1862,16 @@ fn workspace_scopes_object_completions_to_the_active_database() -> Result<()> {
         .expect("views row should exist");
     workspace.select_tree_row_index(views_index)?;
     workspace.open_selected_tree_item_default()?;
+    drain_until(
+        &mut workspace,
+        |workspace| {
+            workspace
+                .tree_rows()
+                .iter()
+                .any(|row| row.label == "user_events")
+        },
+        "the lazily loaded analytics objects",
+    )?;
     let events_index = workspace
         .tree_rows()
         .iter()

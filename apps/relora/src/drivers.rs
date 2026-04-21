@@ -2,8 +2,8 @@ use std::{env, ffi::OsString, path::PathBuf, process::Command};
 
 use anyhow::{Context, Result, bail};
 use relora_core::db::{
-    Catalog, DatabaseDriver, DatabaseKind, DbColumn, DbObjectRef, DriverCapabilities,
-    SqlExecutionResult, TablePreview,
+    Catalog, CatalogSummary, DatabaseDriver, DatabaseKind, DbColumn, DbObjectKind, DbObjectRef,
+    DriverCapabilities, SqlExecutionResult, TablePreview,
 };
 use serde::de::DeserializeOwned;
 use url::Url;
@@ -227,6 +227,41 @@ impl DatabaseDriver for ExternalCommandDriver {
 
     fn load_catalog(&mut self) -> Result<Catalog> {
         self.run_json("catalog", Vec::new())
+    }
+
+    fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
+        self.run_json("catalog-summary", Vec::new())
+    }
+
+    fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
+        self.run_json(
+            "schema-objects",
+            vec![
+                "--database".into(),
+                database.into(),
+                "--schema".into(),
+                schema.into(),
+            ],
+        )
+    }
+
+    fn load_schema_objects_of_kind(
+        &mut self,
+        database: &str,
+        schema: &str,
+        kind: DbObjectKind,
+    ) -> Result<Vec<DbObjectRef>> {
+        self.run_json(
+            "schema-objects",
+            vec![
+                "--database".into(),
+                database.into(),
+                "--schema".into(),
+                schema.into(),
+                "--kind".into(),
+                kind.wire_name().into(),
+            ],
+        )
     }
 
     fn load_preview_page(

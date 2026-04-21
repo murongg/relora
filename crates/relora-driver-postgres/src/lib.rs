@@ -3,8 +3,9 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use postgres::{Client, NoTls, SimpleQueryMessage};
 use relora_core::db::{
-    Catalog, CommandResult, DatabaseDriver, DatabaseEntry, DatabaseKind, DbColumn, DbObjectKind,
-    DbObjectRef, QueryResult, SchemaEntry, SqlExecutionResult, TablePreview,
+    Catalog, CatalogSummary, CommandResult, DatabaseDriver, DatabaseEntry, DatabaseKind,
+    DatabaseSummary, DbColumn, DbObjectKind, DbObjectRef, ObjectKindCount, QueryResult,
+    SchemaEntry, SchemaSummary, SqlExecutionResult, TablePreview,
 };
 use serde_json::Value;
 use url::Url;
@@ -15,6 +16,19 @@ const CATALOG_SQL: &str = r#"
     WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
       AND table_type IN ('BASE TABLE', 'VIEW', 'FOREIGN TABLE')
     ORDER BY table_schema, table_name
+"#;
+
+const CATALOG_SUMMARY_SQL: &str = r#"
+    SELECT
+        table_schema,
+        COUNT(*) FILTER (WHERE table_type = 'BASE TABLE') AS table_count,
+        COUNT(*) FILTER (WHERE table_type = 'VIEW') AS view_count,
+        COUNT(*) FILTER (WHERE table_type = 'FOREIGN TABLE') AS foreign_table_count
+    FROM information_schema.tables
+    WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+      AND table_type IN ('BASE TABLE', 'VIEW', 'FOREIGN TABLE')
+    GROUP BY table_schema
+    ORDER BY table_schema
 "#;
 
 const COLUMN_SQL: &str = r#"
@@ -156,6 +170,107 @@ impl DatabaseDriver for PostgresDriver {
             .collect::<Result<Vec<_>>>()?;
 
         Ok(Catalog { databases })
+    }
+
+    fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
+        let databases = self
+            .database_names()?
+            .into_iter()
+            .map(|database| {
+                let client = self.client_for_database(&database)?;
+                let rows = client.query(CATALOG_SUMMARY_SQL, &[]).with_context(|| {
+                    format!("failed to query PostgreSQL catalog summary for {database}")
+                })?;
+
+                Ok(DatabaseSummary {
+                    name: database.clone(),
+                    schemas: rows
+                        .into_iter()
+                        .map(|row| SchemaSummary {
+                            database: database.clone(),
+                            name: row.get::<_, String>(0),
+                            object_counts: [
+                                (DbObjectKind::Table, row.get::<_, i64>(1)),
+                                (DbObjectKind::View, row.get::<_, i64>(2)),
+                                (DbObjectKind::ForeignTable, row.get::<_, i64>(3)),
+                            ]
+                            .into_iter()
+                            .filter(|(_, count)| *count > 0)
+                            .map(|(kind, count)| ObjectKindCount {
+                                kind,
+                                count: count as usize,
+                            })
+                            .collect(),
+                        })
+                        .collect(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(CatalogSummary { databases })
+    }
+
+    fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
+        let client = self.client_for_database(database)?;
+        let rows = client
+            .query(
+                "SELECT table_schema, table_name, table_type
+                 FROM information_schema.tables
+                 WHERE table_schema = $1
+                   AND table_schema NOT IN ('pg_catalog', 'information_schema')
+                   AND table_type IN ('BASE TABLE', 'VIEW', 'FOREIGN TABLE')
+                 ORDER BY table_type, table_name",
+                &[&schema],
+            )
+            .with_context(|| {
+                format!("failed to query PostgreSQL schema objects for {database}.{schema}")
+            })?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| DbObjectRef {
+                database: database.to_string(),
+                schema: row.get::<_, String>(0),
+                name: row.get::<_, String>(1),
+                kind: parse_object_kind(&row.get::<_, String>(2)),
+            })
+            .collect())
+    }
+
+    fn load_schema_objects_of_kind(
+        &mut self,
+        database: &str,
+        schema: &str,
+        kind: DbObjectKind,
+    ) -> Result<Vec<DbObjectRef>> {
+        let table_type = postgres_table_type(kind);
+        let client = self.client_for_database(database)?;
+        let rows = client
+            .query(
+                "SELECT table_schema, table_name, table_type
+                 FROM information_schema.tables
+                 WHERE table_schema = $1
+                   AND table_schema NOT IN ('pg_catalog', 'information_schema')
+                   AND table_type = $2
+                 ORDER BY table_name",
+                &[&schema, &table_type],
+            )
+            .with_context(|| {
+                format!(
+                    "failed to query PostgreSQL {} for {database}.{schema}",
+                    kind.group_label()
+                )
+            })?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| DbObjectRef {
+                database: database.to_string(),
+                schema: row.get::<_, String>(0),
+                name: row.get::<_, String>(1),
+                kind: parse_object_kind(&row.get::<_, String>(2)),
+            })
+            .collect())
     }
 
     fn load_preview_page(
@@ -385,6 +500,14 @@ fn parse_object_kind(table_type: &str) -> DbObjectKind {
         "VIEW" => DbObjectKind::View,
         "FOREIGN TABLE" => DbObjectKind::ForeignTable,
         _ => DbObjectKind::Table,
+    }
+}
+
+fn postgres_table_type(kind: DbObjectKind) -> &'static str {
+    match kind {
+        DbObjectKind::Table => "BASE TABLE",
+        DbObjectKind::View => "VIEW",
+        DbObjectKind::ForeignTable => "FOREIGN TABLE",
     }
 }
 

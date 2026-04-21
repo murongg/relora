@@ -12,8 +12,8 @@ use anyhow::Result;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use relora_app::workspace::{ConnectionBootstrap, WorkspaceAction, WorkspaceApp};
 use relora_core::db::{
-    Catalog, DatabaseDriver, DatabaseEntry, DatabaseKind, DbColumn, DbObjectKind, DbObjectRef,
-    QueryResult, SchemaEntry, SqlExecutionResult, TablePreview,
+    Catalog, CatalogSummary, DatabaseDriver, DatabaseEntry, DatabaseKind, DbColumn, DbObjectKind,
+    DbObjectRef, QueryResult, SchemaEntry, SqlExecutionResult, TablePreview,
 };
 
 #[derive(Debug)]
@@ -37,6 +37,7 @@ struct BlockingCatalogStormDriver {
     previews: VecDeque<TablePreview>,
     unblock_catalog: Option<mpsc::Receiver<()>>,
     catalog_calls: Arc<AtomicUsize>,
+    active_catalog: Option<Catalog>,
 }
 
 impl MockDriver {
@@ -81,6 +82,7 @@ impl BlockingCatalogStormDriver {
             previews: VecDeque::from(previews),
             unblock_catalog: Some(unblock_catalog),
             catalog_calls,
+            active_catalog: None,
         }
     }
 }
@@ -98,6 +100,28 @@ impl DatabaseDriver for MockDriver {
         self.catalogs
             .pop_front()
             .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
+    }
+
+    fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
+        self.catalogs
+            .front()
+            .cloned()
+            .map(CatalogSummary::from)
+            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
+    }
+
+    fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
+        self.catalogs
+            .front()
+            .and_then(|catalog| {
+                catalog
+                    .databases
+                    .iter()
+                    .find(|entry| entry.name == database)
+                    .and_then(|entry| entry.schemas.iter().find(|entry| entry.name == schema))
+                    .map(|entry| entry.objects.clone())
+            })
+            .ok_or_else(|| anyhow::anyhow!("missing mocked schema objects for {database}.{schema}"))
     }
 
     fn load_preview_page(
@@ -149,6 +173,28 @@ impl DatabaseDriver for BlockingPreviewDriver {
         self.catalogs
             .pop_front()
             .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
+    }
+
+    fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
+        self.catalogs
+            .front()
+            .cloned()
+            .map(CatalogSummary::from)
+            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
+    }
+
+    fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
+        self.catalogs
+            .front()
+            .and_then(|catalog| {
+                catalog
+                    .databases
+                    .iter()
+                    .find(|entry| entry.name == database)
+                    .and_then(|entry| entry.schemas.iter().find(|entry| entry.name == schema))
+                    .map(|entry| entry.objects.clone())
+            })
+            .ok_or_else(|| anyhow::anyhow!("missing mocked schema objects for {database}.{schema}"))
     }
 
     fn load_preview_page(
@@ -218,6 +264,39 @@ impl DatabaseDriver for BlockingCatalogStormDriver {
         self.catalogs
             .pop_front()
             .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
+    }
+
+    fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
+        let previous = self.catalog_calls.fetch_add(1, Ordering::SeqCst);
+        if previous >= 1 {
+            if let Some(receiver) = self.unblock_catalog.take() {
+                receiver
+                    .recv()
+                    .map_err(|_| anyhow::anyhow!("catalog unblock signal was dropped"))?;
+            }
+        }
+
+        let catalog = self
+            .catalogs
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))?;
+        let summary = CatalogSummary::from(&catalog);
+        self.active_catalog = Some(catalog);
+        Ok(summary)
+    }
+
+    fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
+        self.active_catalog
+            .as_ref()
+            .and_then(|catalog| {
+                catalog
+                    .databases
+                    .iter()
+                    .find(|entry| entry.name == database)
+                    .and_then(|entry| entry.schemas.iter().find(|entry| entry.name == schema))
+                    .map(|entry| entry.objects.clone())
+            })
+            .ok_or_else(|| anyhow::anyhow!("missing mocked schema objects for {database}.{schema}"))
     }
 
     fn load_preview_page(

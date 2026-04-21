@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, bail};
 use relora_core::db::{
-    Catalog, CommandResult, DatabaseDriver, DatabaseEntry, DatabaseKind, DbColumn, DbObjectKind,
-    DbObjectRef, QueryResult, SchemaEntry, SqlExecutionResult, TablePreview,
+    Catalog, CatalogSummary, CommandResult, DatabaseDriver, DatabaseEntry, DatabaseKind,
+    DatabaseSummary, DbColumn, DbObjectKind, DbObjectRef, ObjectKindCount, QueryResult,
+    SchemaEntry, SchemaSummary, SqlExecutionResult, TablePreview,
 };
 use rusqlite::{Connection, Row, types::ValueRef};
 use url::Url;
@@ -112,6 +113,100 @@ impl DatabaseDriver for SqliteDriver {
             .collect::<Result<Vec<_>>>()?;
 
         Ok(Catalog { databases })
+    }
+
+    fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
+        let databases = self
+            .database_names()?
+            .into_iter()
+            .map(|database| {
+                let sql = format!(
+                    "SELECT type, COUNT(*) FROM {}.sqlite_master \
+                     WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' \
+                     GROUP BY type ORDER BY type",
+                    quoted_identifier(&database)
+                );
+                let mut statement = self.connection.prepare(&sql).with_context(|| {
+                    format!("failed to inspect SQLite catalog summary for {database}")
+                })?;
+                let rows = statement.query_map([], |row| {
+                    Ok(ObjectKindCount {
+                        kind: sqlite_object_kind(&row.get::<_, String>(0)?),
+                        count: row.get::<_, i64>(1)? as usize,
+                    })
+                })?;
+                let object_counts = rows
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .context("failed to read SQLite catalog summary rows")?;
+
+                Ok(DatabaseSummary {
+                    name: database.clone(),
+                    schemas: vec![SchemaSummary {
+                        database: database.clone(),
+                        name: database,
+                        object_counts,
+                    }],
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(CatalogSummary { databases })
+    }
+
+    fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
+        self.load_catalog_for_database(schema)
+            .map(|entry| {
+                entry
+                    .schemas
+                    .into_iter()
+                    .next()
+                    .map(|schema| schema.objects)
+                    .unwrap_or_default()
+            })
+            .with_context(|| {
+                format!("failed to inspect SQLite schema objects for {database}.{schema}")
+            })
+    }
+
+    fn load_schema_objects_of_kind(
+        &mut self,
+        database: &str,
+        schema: &str,
+        kind: DbObjectKind,
+    ) -> Result<Vec<DbObjectRef>> {
+        let Some(object_type) = sqlite_object_type(kind) else {
+            return Ok(Vec::new());
+        };
+        let sql = format!(
+            "SELECT name, type
+             FROM {}.sqlite_master
+             WHERE type = ?1
+               AND name NOT LIKE 'sqlite_%'
+             ORDER BY name",
+            quoted_identifier(schema)
+        );
+        let mut statement = self.connection.prepare(&sql).with_context(|| {
+            format!(
+                "failed to inspect SQLite {} for {database}.{schema}",
+                kind.group_label()
+            )
+        })?;
+        let rows = statement.query_map([object_type], |row| {
+            Ok(DbObjectRef {
+                database: database.to_string(),
+                schema: schema.to_string(),
+                name: row.get(0)?,
+                kind: sqlite_object_kind(&row.get::<_, String>(1)?),
+            })
+        })?;
+
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| {
+                format!(
+                    "failed to read SQLite {} for {database}.{schema}",
+                    kind.group_label()
+                )
+            })
     }
 
     fn load_preview_page(
@@ -325,6 +420,14 @@ fn sqlite_object_kind(object_type: &str) -> DbObjectKind {
     match object_type {
         "view" => DbObjectKind::View,
         _ => DbObjectKind::Table,
+    }
+}
+
+fn sqlite_object_type(kind: DbObjectKind) -> Option<&'static str> {
+    match kind {
+        DbObjectKind::Table => Some("table"),
+        DbObjectKind::View => Some("view"),
+        DbObjectKind::ForeignTable => None,
     }
 }
 

@@ -3,8 +3,9 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use mysql::{Opts, Params, Pool, PooledConn, Row, Value, prelude::Queryable};
 use relora_core::db::{
-    Catalog, CommandResult, DatabaseDriver, DatabaseEntry, DatabaseKind, DbColumn, DbObjectKind,
-    DbObjectRef, QueryResult, SchemaEntry, SqlExecutionResult, TablePreview,
+    Catalog, CatalogSummary, CommandResult, DatabaseDriver, DatabaseEntry, DatabaseKind,
+    DatabaseSummary, DbColumn, DbObjectKind, DbObjectRef, ObjectKindCount, QueryResult,
+    SchemaEntry, SchemaSummary, SqlExecutionResult, TablePreview,
 };
 use url::Url;
 
@@ -14,6 +15,15 @@ const CATALOG_SQL: &str = r#"
     WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
       AND table_type IN ('BASE TABLE', 'VIEW')
     ORDER BY table_schema, table_name
+"#;
+
+const CATALOG_SUMMARY_SQL: &str = r#"
+    SELECT table_schema, table_type, COUNT(*) AS object_count
+    FROM information_schema.tables
+    WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+      AND table_type IN ('BASE TABLE', 'VIEW')
+    GROUP BY table_schema, table_type
+    ORDER BY table_schema, table_type
 "#;
 
 const COLUMN_SQL: &str = r#"
@@ -110,6 +120,98 @@ impl DatabaseDriver for MySqlDriver {
                 })
                 .collect(),
         })
+    }
+
+    fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
+        let mut connection = self.connection()?;
+        let rows = connection
+            .query::<(String, String, u64), _>(CATALOG_SUMMARY_SQL)
+            .context("failed to query MySQL/MariaDB catalog summary")?;
+        let mut databases: BTreeMap<String, Vec<ObjectKindCount>> = BTreeMap::new();
+
+        for (schema, table_type, object_count) in rows {
+            databases.entry(schema).or_default().push(ObjectKindCount {
+                kind: mysql_object_kind(&table_type),
+                count: object_count as usize,
+            });
+        }
+
+        Ok(CatalogSummary {
+            databases: databases
+                .into_iter()
+                .map(|(database, object_counts)| DatabaseSummary {
+                    name: database.clone(),
+                    schemas: vec![SchemaSummary {
+                        database: database.clone(),
+                        name: database,
+                        object_counts,
+                    }],
+                })
+                .collect(),
+        })
+    }
+
+    fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
+        let mut connection = self.connection()?;
+        let rows = connection
+            .exec::<(String, String, String), _, _>(
+                "SELECT table_schema, table_name, table_type
+                 FROM information_schema.tables
+                 WHERE table_schema = ?
+                   AND table_type IN ('BASE TABLE', 'VIEW')
+                 ORDER BY table_type, table_name",
+                (schema,),
+            )
+            .with_context(|| {
+                format!("failed to query MySQL/MariaDB schema objects for {database}.{schema}")
+            })?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(schema, name, table_type)| DbObjectRef {
+                database: database.to_string(),
+                schema,
+                name,
+                kind: mysql_object_kind(&table_type),
+            })
+            .collect())
+    }
+
+    fn load_schema_objects_of_kind(
+        &mut self,
+        database: &str,
+        schema: &str,
+        kind: DbObjectKind,
+    ) -> Result<Vec<DbObjectRef>> {
+        let Some(table_type) = mysql_table_type(kind) else {
+            return Ok(Vec::new());
+        };
+        let mut connection = self.connection()?;
+        let rows = connection
+            .exec::<(String, String, String), _, _>(
+                "SELECT table_schema, table_name, table_type
+                 FROM information_schema.tables
+                 WHERE table_schema = ?
+                   AND table_type = ?
+                 ORDER BY table_name",
+                (schema, table_type),
+            )
+            .with_context(|| {
+                format!(
+                    "failed to query MySQL/MariaDB {} for {database}.{schema}",
+                    kind.group_label()
+                )
+            })?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(schema, name, table_type)| DbObjectRef {
+                database: database.to_string(),
+                schema,
+                name,
+                kind: mysql_object_kind(&table_type),
+            })
+            .collect())
     }
 
     fn load_preview_page(
@@ -319,6 +421,14 @@ fn mysql_object_kind(table_type: &str) -> DbObjectKind {
     match table_type {
         "VIEW" => DbObjectKind::View,
         _ => DbObjectKind::Table,
+    }
+}
+
+fn mysql_table_type(kind: DbObjectKind) -> Option<&'static str> {
+    match kind {
+        DbObjectKind::Table => Some("BASE TABLE"),
+        DbObjectKind::View => Some("VIEW"),
+        DbObjectKind::ForeignTable => None,
     }
 }
 

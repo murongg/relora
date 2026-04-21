@@ -10,8 +10,8 @@ use ratatui::backend::TestBackend;
 use relora::tui::render_workspace_for_benchmark;
 use relora_app::workspace::{ConnectionBootstrap, WorkspaceAction, WorkspaceApp};
 use relora_core::db::{
-    Catalog, DatabaseDriver, DatabaseEntry, DatabaseKind, DbColumn, DbObjectKind, DbObjectRef,
-    QueryResult, SchemaEntry, SqlExecutionResult, TablePreview,
+    Catalog, CatalogSummary, DatabaseDriver, DatabaseEntry, DatabaseKind, DbColumn, DbObjectKind,
+    DbObjectRef, QueryResult, SchemaEntry, SqlExecutionResult, TablePreview,
 };
 
 #[derive(Debug)]
@@ -49,6 +49,28 @@ impl DatabaseDriver for MockDriver {
         self.catalogs
             .pop_front()
             .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
+    }
+
+    fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
+        self.catalogs
+            .front()
+            .cloned()
+            .map(CatalogSummary::from)
+            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
+    }
+
+    fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
+        self.catalogs
+            .front()
+            .and_then(|catalog| {
+                catalog
+                    .databases
+                    .iter()
+                    .find(|entry| entry.name == database)
+                    .and_then(|entry| entry.schemas.iter().find(|entry| entry.name == schema))
+                    .map(|entry| entry.objects.clone())
+            })
+            .ok_or_else(|| anyhow::anyhow!("missing mocked schema objects for {database}.{schema}"))
     }
 
     fn load_preview_page(

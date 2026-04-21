@@ -6,7 +6,8 @@ use std::{
 
 use anyhow::{Result, anyhow};
 use relora_core::db::{
-    Catalog, DatabaseDriver, DbColumn, DbObjectRef, SqlExecutionResult, TablePreview,
+    CatalogSummary, DatabaseDriver, DbColumn, DbObjectKind, DbObjectRef, SqlExecutionResult,
+    TablePreview,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +97,24 @@ impl SessionWorker {
         Ok(request_id)
     }
 
+    pub fn request_schema_objects(
+        &mut self,
+        database: String,
+        schema: String,
+        kind: DbObjectKind,
+    ) -> Result<u64> {
+        let request_id = self.next_request_id();
+        self.command_tx
+            .send(SessionCommand::LoadSchemaObjects {
+                request_id,
+                database,
+                schema,
+                kind,
+            })
+            .map_err(|_| anyhow!("background worker is unavailable"))?;
+        Ok(request_id)
+    }
+
     pub fn request_template(&mut self, object: DbObjectRef, kind: TemplateKind) -> Result<u64> {
         let request_id = self.next_request_id();
         self.command_tx
@@ -177,6 +196,12 @@ enum SessionCommand {
         preview_offset: usize,
         preview_filter: Option<String>,
     },
+    LoadSchemaObjects {
+        request_id: u64,
+        database: String,
+        schema: String,
+        kind: DbObjectKind,
+    },
     LoadColumns {
         request_id: u64,
         object: DbObjectRef,
@@ -198,6 +223,14 @@ enum SessionCommand {
 }
 
 #[derive(Debug)]
+pub(crate) struct LoadedObjectGroup {
+    pub(crate) database: String,
+    pub(crate) schema: String,
+    pub(crate) kind: DbObjectKind,
+    pub(crate) result: std::result::Result<Vec<DbObjectRef>, String>,
+}
+
+#[derive(Debug)]
 pub(crate) enum SessionEvent {
     PreviewLoaded {
         request_id: u64,
@@ -207,10 +240,18 @@ pub(crate) enum SessionEvent {
     },
     CatalogRefreshed {
         request_id: u64,
-        catalog: std::result::Result<Catalog, String>,
+        catalog_summary: std::result::Result<CatalogSummary, String>,
+        loaded_group: Option<LoadedObjectGroup>,
         preview_target: Option<DbObjectRef>,
         preview_offset: usize,
         preview: Option<std::result::Result<TablePreview, String>>,
+    },
+    SchemaObjectsLoaded {
+        request_id: u64,
+        database: String,
+        schema: String,
+        kind: DbObjectKind,
+        result: std::result::Result<Vec<DbObjectRef>, String>,
     },
     ColumnsLoaded {
         request_id: u64,
@@ -276,35 +317,91 @@ fn worker_loop(
                     preview_offset,
                     preview_filter,
                 } => {
-                    let catalog = driver.load_catalog().map_err(|error| error.to_string());
-                    let (preview_target, preview) = match (&catalog, selected_object) {
-                        (Ok(catalog), Some(object)) if object_exists(catalog, &object) => {
-                            let preview = match &preview_filter {
-                                Some(filter) => driver
-                                    .load_filtered_preview_page(
-                                        &object,
-                                        filter,
-                                        preview_limit,
-                                        preview_offset,
+                    let catalog_summary = driver
+                        .load_catalog_summary()
+                        .map_err(|error| error.to_string());
+                    let (loaded_group, preview_target, preview) =
+                        match (&catalog_summary, selected_object) {
+                            (Ok(summary), Some(object))
+                                if schema_has_kind(
+                                    summary,
+                                    &object.database,
+                                    &object.schema,
+                                    object.kind,
+                                ) =>
+                            {
+                                let objects = driver
+                                    .load_schema_objects_of_kind(
+                                        &object.database,
+                                        &object.schema,
+                                        object.kind,
                                     )
-                                    .map_err(|error| error.to_string()),
-                                None => driver
-                                    .load_preview_page(&object, preview_limit, preview_offset)
-                                    .map_err(|error| error.to_string()),
-                            };
-                            (Some(object), Some(preview))
-                        }
-                        _ => (None, None),
-                    };
+                                    .map_err(|error| error.to_string());
+                                let preview = match &objects {
+                                    Ok(objects)
+                                        if objects.iter().any(|candidate| {
+                                            candidate.name == object.name
+                                                && candidate.kind == object.kind
+                                        }) =>
+                                    {
+                                        let preview = match &preview_filter {
+                                            Some(filter) => driver
+                                                .load_filtered_preview_page(
+                                                    &object,
+                                                    filter,
+                                                    preview_limit,
+                                                    preview_offset,
+                                                )
+                                                .map_err(|error| error.to_string()),
+                                            None => driver
+                                                .load_preview_page(
+                                                    &object,
+                                                    preview_limit,
+                                                    preview_offset,
+                                                )
+                                                .map_err(|error| error.to_string()),
+                                        };
+                                        (Some(object.clone()), Some(preview))
+                                    }
+                                    _ => (None, None),
+                                };
+                                (
+                                    Some(LoadedObjectGroup {
+                                        database: object.database.clone(),
+                                        schema: object.schema.clone(),
+                                        kind: object.kind,
+                                        result: objects,
+                                    }),
+                                    preview.0,
+                                    preview.1,
+                                )
+                            }
+                            _ => (None, None, None),
+                        };
 
                     SessionEvent::CatalogRefreshed {
                         request_id,
-                        catalog,
+                        catalog_summary,
+                        loaded_group,
                         preview_target,
                         preview_offset,
                         preview,
                     }
                 }
+                SessionCommand::LoadSchemaObjects {
+                    request_id,
+                    database,
+                    schema,
+                    kind,
+                } => SessionEvent::SchemaObjectsLoaded {
+                    request_id,
+                    database: database.clone(),
+                    schema: schema.clone(),
+                    kind,
+                    result: driver
+                        .load_schema_objects_of_kind(&database, &schema, kind)
+                        .map_err(|error| error.to_string()),
+                },
                 SessionCommand::LoadColumns {
                     request_id,
                     object,
@@ -370,6 +467,7 @@ fn normalize_commands(
     let mut should_shutdown = false;
     let mut preview = None;
     let mut refresh = None;
+    let mut schema_objects = std::collections::BTreeMap::new();
     let mut columns = None;
     let mut structure_columns = None;
     let mut executes = Vec::new();
@@ -398,6 +496,16 @@ fn normalize_commands(
                     refresh = Some(command);
                 }
             }
+            SessionCommand::LoadSchemaObjects {
+                request_id,
+                ref database,
+                ref schema,
+                kind,
+            } => {
+                if !canceled_request_ids.contains(&request_id) {
+                    schema_objects.insert((database.clone(), schema.clone(), kind), command);
+                }
+            }
             SessionCommand::LoadColumns { request_id, .. } => {
                 if !canceled_request_ids.contains(&request_id) {
                     columns = Some(command);
@@ -421,6 +529,7 @@ fn normalize_commands(
     if let Some(command) = refresh {
         normalized.push(command);
     }
+    normalized.extend(schema_objects.into_values());
     if let Some(command) = columns {
         normalized.push(command);
     }
@@ -434,16 +543,15 @@ fn normalize_commands(
     (normalized, should_shutdown)
 }
 
-fn object_exists(catalog: &Catalog, object: &DbObjectRef) -> bool {
-    catalog.databases.iter().any(|database| {
-        database.name == object.database
-            && database.schemas.iter().any(|schema| {
-                schema.name == object.schema
-                    && schema.objects.iter().any(|candidate| {
-                        candidate.name == object.name && candidate.kind == object.kind
-                    })
-            })
-    })
+fn schema_has_kind(
+    catalog: &CatalogSummary,
+    database_name: &str,
+    schema_name: &str,
+    kind: DbObjectKind,
+) -> bool {
+    catalog
+        .find_schema(database_name, schema_name)
+        .is_some_and(|schema| schema.object_count(kind) > 0)
 }
 
 #[cfg(test)]

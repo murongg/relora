@@ -7,8 +7,8 @@ use anyhow::{Result, anyhow};
 use relora_core::{
     app::App as ConnectionApp,
     db::{
-        DatabaseKind, DbColumn, DbObjectKind, DbObjectRef, DriverCapabilities, SqlExecutionResult,
-        TablePreview,
+        CatalogSummary, DatabaseKind, DbColumn, DbObjectKind, DbObjectRef, DriverCapabilities,
+        SqlExecutionResult, TablePreview,
     },
 };
 
@@ -323,12 +323,14 @@ struct ConnectionSession {
     kind: DatabaseKind,
     capabilities: DriverCapabilities,
     read_only: bool,
+    catalog_summary: CatalogSummary,
     app: ConnectionApp,
     worker: SessionWorker,
     expanded: bool,
     expanded_databases: BTreeSet<String>,
     expanded_schemas: BTreeSet<(String, String)>,
     expanded_groups: BTreeSet<(String, String, DbObjectKind)>,
+    loaded_groups: BTreeSet<(String, String, DbObjectKind)>,
     pending: PendingSessionWork,
 }
 
@@ -336,6 +338,7 @@ struct ConnectionSession {
 struct PendingSessionWork {
     preview_request: Option<PendingPreviewRequest>,
     refresh_request_id: Option<u64>,
+    group_request_ids: BTreeMap<(String, String, DbObjectKind), u64>,
     template_request: Option<PendingTemplateRequest>,
     structure_request: Option<PendingStructureRequest>,
     execute_requests: BTreeMap<u64, usize>,
@@ -524,19 +527,50 @@ impl WorkspaceApp {
         for bootstrap in bootstraps {
             let mut driver = bootstrap.driver;
             let capabilities = driver.capabilities();
-            let app = ConnectionApp::bootstrap(driver.as_mut(), preview_limit)?;
+            let catalog_summary = driver.load_catalog_summary()?;
+            let mut app = ConnectionApp::from_catalog(
+                catalog_summary.as_catalog_with_unloaded_objects(),
+                driver.connection_label(),
+                preview_limit,
+            );
+            let mut loaded_groups = BTreeSet::new();
+            if let Some((database, schema, kind)) =
+                first_object_group_with_objects(&catalog_summary)
+            {
+                let objects = driver.load_schema_objects_of_kind(&database, &schema, kind)?;
+                app.merge_schema_objects_of_kind(&database, &schema, kind, objects)?;
+                app.select_schema_locally(&database, &schema)?;
+                loaded_groups.insert((database, schema, kind));
+                let preview_result = app
+                    .selected_object()
+                    .cloned()
+                    .map(|object| {
+                        driver
+                            .load_preview(&object, preview_limit)
+                            .map_err(|error| error.to_string())
+                    })
+                    .unwrap_or_else(|| Ok(TablePreview::default()));
+                app.apply_preview_result(preview_result);
+            } else {
+                app.set_status(format!(
+                    "Connected to {}. No database objects were found.",
+                    driver.connection_label()
+                ));
+            }
             let mut session = ConnectionSession {
                 name: bootstrap.name,
                 connection_label: app.connection_label().to_string(),
                 kind: driver.kind(),
                 capabilities,
                 read_only: false,
+                catalog_summary,
                 worker: SessionWorker::spawn(driver),
                 app,
                 expanded: true,
                 expanded_databases: BTreeSet::new(),
                 expanded_schemas: BTreeSet::new(),
                 expanded_groups: BTreeSet::new(),
+                loaded_groups,
                 pending: PendingSessionWork::default(),
             };
 
@@ -975,27 +1009,13 @@ impl WorkspaceApp {
             delete_confirmation: self.delete_confirmation_view(),
             status: self.selected_session_status(),
             selected_connection_database_count: selected_session
-                .map(|session| session.app.databases().len())
+                .map(|session| session.catalog_summary.databases.len())
                 .unwrap_or_default(),
             selected_connection_schema_count: selected_session
-                .map(|session| {
-                    session
-                        .app
-                        .databases()
-                        .iter()
-                        .map(|database| database.schemas.len())
-                        .sum()
-                })
+                .map(|session| session.catalog_summary.schema_count())
                 .unwrap_or_default(),
             selected_connection_object_count: selected_session
-                .map(|session| {
-                    session
-                        .app
-                        .databases()
-                        .iter()
-                        .map(|database| database.object_count())
-                        .sum()
-                })
+                .map(|session| session.catalog_summary.object_count())
                 .unwrap_or_default(),
             selected_schema_table_count: self
                 .object_count_for_selected_schema(DbObjectKind::Table)
@@ -1414,27 +1434,11 @@ impl WorkspaceApp {
     }
 
     pub fn selected_connection_schema_count(&self) -> Option<usize> {
-        let session = self.selected_session()?;
-        Some(
-            session
-                .app
-                .databases()
-                .iter()
-                .map(|database| database.schemas.len())
-                .sum(),
-        )
+        Some(self.selected_session()?.catalog_summary.schema_count())
     }
 
     pub fn selected_connection_object_count(&self) -> Option<usize> {
-        let session = self.selected_session()?;
-        Some(
-            session
-                .app
-                .databases()
-                .iter()
-                .map(|database| database.object_count())
-                .sum(),
-        )
+        Some(self.selected_session()?.catalog_summary.object_count())
     }
 
     pub fn object_count_for_selected_schema(&self, kind: DbObjectKind) -> Option<usize> {
@@ -1442,8 +1446,8 @@ impl WorkspaceApp {
         let database_name = self.selected_database_name()?;
         let schema_name = self.selected_schema_name()?;
         let schema = session
-            .app
-            .databases()
+            .catalog_summary
+            .databases
             .iter()
             .find(|database| database.name == database_name)?
             .schemas
@@ -2550,10 +2554,25 @@ impl WorkspaceApp {
                 schema,
                 kind,
             } => {
+                let group_key = (database.clone(), schema.clone(), kind);
+                let should_load_group =
+                    !self.sessions[connection].loaded_groups.contains(&group_key);
                 toggle_set(
                     &mut self.sessions[connection].expanded_groups,
-                    (database.clone(), schema.clone(), kind),
+                    group_key.clone(),
                 );
+                if should_load_group
+                    && self.sessions[connection]
+                        .expanded_groups
+                        .contains(&group_key)
+                {
+                    self.schedule_schema_objects_for_connection_group(
+                        connection,
+                        database.clone(),
+                        schema.clone(),
+                        kind,
+                    )?;
+                }
                 self.rebuild_rows(Some(TreeNodeKey::Group {
                     connection,
                     database,
@@ -3282,10 +3301,12 @@ impl WorkspaceApp {
         if let Some(structure_request) = &session.pending.structure_request {
             cancel_ids.push(structure_request.request_id);
         }
+        cancel_ids.extend(session.pending.group_request_ids.values().copied());
         session.worker.cancel_requests(cancel_ids)?;
         session.pending.refresh_request_id = None;
         session.pending.preview_request = None;
         session.pending.structure_request = None;
+        session.pending.group_request_ids.clear();
         if self.active_right_tab == RightPaneTab::Structure {
             self.structure.clear();
         }
@@ -3348,6 +3369,41 @@ impl WorkspaceApp {
             TreeNodeKey::Object { connection, object } => Some((*connection, object.clone())),
             _ => None,
         }
+    }
+
+    fn schedule_schema_objects_for_connection_group(
+        &mut self,
+        connection_index: usize,
+        database: String,
+        schema: String,
+        kind: DbObjectKind,
+    ) -> Result<()> {
+        let session = self
+            .sessions
+            .get_mut(connection_index)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        let key = (database.clone(), schema.clone(), kind);
+        if session.loaded_groups.contains(&key)
+            || session.pending.group_request_ids.contains_key(&key)
+        {
+            return Ok(());
+        }
+
+        let request_id =
+            session
+                .worker
+                .request_schema_objects(database.clone(), schema.clone(), kind)?;
+        session
+            .pending
+            .group_request_ids
+            .insert(key.clone(), request_id);
+        session.app.set_status(format!(
+            "Loading {} for schema {}.{}...",
+            kind.group_label(),
+            database,
+            schema
+        ));
+        Ok(())
     }
 
     fn schedule_structure_for_connection_object(
@@ -3449,7 +3505,8 @@ impl WorkspaceApp {
             }
             SessionEvent::CatalogRefreshed {
                 request_id,
-                catalog,
+                catalog_summary,
+                loaded_group,
                 preview_target,
                 preview_offset,
                 preview,
@@ -3469,10 +3526,52 @@ impl WorkspaceApp {
                         return Ok(());
                     }
 
+                    let current_selected_object = session.app.selected_object().cloned();
                     session.pending.refresh_request_id = None;
-                    match catalog {
-                        Ok(catalog) => {
-                            session.app.replace_catalog(catalog);
+                    match catalog_summary {
+                        Ok(catalog_summary) => {
+                            session.catalog_summary = catalog_summary.clone();
+                            session.loaded_groups.clear();
+                            session.app.replace_catalog(
+                                catalog_summary.as_catalog_with_unloaded_objects(),
+                            );
+
+                            if let Some(loaded_group) = loaded_group {
+                                match loaded_group.result {
+                                    Ok(objects) => {
+                                        session.app.merge_schema_objects_of_kind(
+                                            &loaded_group.database,
+                                            &loaded_group.schema,
+                                            loaded_group.kind,
+                                            objects,
+                                        )?;
+                                        if let Some(target) =
+                                            current_selected_object.as_ref().filter(|target| {
+                                                target.database == loaded_group.database
+                                                    && target.schema == loaded_group.schema
+                                                    && target.kind == loaded_group.kind
+                                            })
+                                        {
+                                            let _ = session.app.select_object_locally(
+                                                &target.database,
+                                                &target.schema,
+                                                &target.name,
+                                            );
+                                        }
+                                        session.loaded_groups.insert((
+                                            loaded_group.database,
+                                            loaded_group.schema,
+                                            loaded_group.kind,
+                                        ));
+                                    }
+                                    Err(error) => {
+                                        session.app.set_status(format!(
+                                            "Refresh failed to load schema {}: {error}",
+                                            loaded_group.kind.group_label()
+                                        ));
+                                    }
+                                }
+                            }
 
                             if let Some(target) = preview_target {
                                 if session_selected_object_matches(session, &target) {
@@ -3512,6 +3611,52 @@ impl WorkspaceApp {
                 if self.active_right_tab == RightPaneTab::Structure {
                     self.ensure_selected_object_structure()?;
                 }
+            }
+            SessionEvent::SchemaObjectsLoaded {
+                request_id,
+                database,
+                schema,
+                kind,
+                result,
+            } => {
+                let selected_key = self
+                    .entries
+                    .get(self.selected_row)
+                    .map(|entry| entry.key.clone());
+
+                let Some(session) = self.sessions.get_mut(session_index) else {
+                    return Ok(());
+                };
+                let key = (database.clone(), schema.clone(), kind);
+                if session.pending.group_request_ids.get(&key) != Some(&request_id) {
+                    return Ok(());
+                }
+                session.pending.group_request_ids.remove(&key);
+
+                match result {
+                    Ok(objects) => {
+                        session
+                            .app
+                            .merge_schema_objects_of_kind(&database, &schema, kind, objects)?;
+                        session.loaded_groups.insert(key);
+                        session.app.set_status(format!(
+                            "Loaded {} for schema {}.{}.",
+                            kind.group_label(),
+                            database,
+                            schema
+                        ));
+                    }
+                    Err(error) => {
+                        session.app.set_status(format!(
+                            "Failed to load {} for schema {}.{}: {error}",
+                            kind.group_label(),
+                            database,
+                            schema
+                        ));
+                    }
+                }
+
+                self.rebuild_rows(selected_key);
             }
             SessionEvent::ColumnsLoaded {
                 request_id,
@@ -3666,6 +3811,7 @@ impl PendingSessionWork {
     fn count(&self) -> usize {
         usize::from(self.preview_request.is_some())
             + usize::from(self.refresh_request_id.is_some())
+            + self.group_request_ids.len()
             + usize::from(self.template_request.is_some())
             + usize::from(self.structure_request.is_some())
             + self.execute_requests.len()
@@ -3678,6 +3824,7 @@ impl PendingSessionWork {
     fn clear(&mut self) {
         self.preview_request = None;
         self.refresh_request_id = None;
+        self.group_request_ids.clear();
         self.template_request = None;
         self.structure_request = None;
         self.execute_requests.clear();
@@ -3691,6 +3838,7 @@ impl PendingSessionWork {
         if let Some(request_id) = self.refresh_request_id {
             request_ids.push(request_id);
         }
+        request_ids.extend(self.group_request_ids.values().copied());
         if let Some(template_request) = &self.template_request {
             request_ids.push(template_request.request_id);
         }
@@ -4161,9 +4309,9 @@ fn build_rows_for_session(connection_index: usize, session: &ConnectionSession) 
         return rows;
     }
 
-    let show_database_nodes = session.app.databases().len() > 1;
+    let show_database_nodes = session.catalog_summary.databases.len() > 1;
 
-    for database in session.app.databases() {
+    for database in &session.catalog_summary.databases {
         let database_depth = usize::from(show_database_nodes);
         if show_database_nodes {
             let database_expanded = session.expanded_databases.contains(&database.name);
@@ -4207,7 +4355,7 @@ fn build_rows_for_session(connection_index: usize, session: &ConnectionSession) 
                         database_depth + 1,
                         true,
                         schema_expanded,
-                        Some(schema.objects.len().to_string()),
+                        Some(schema.total_object_count().to_string()),
                     ),
                     key: TreeNodeKey::Schema {
                         connection: connection_index,
@@ -4222,8 +4370,8 @@ fn build_rows_for_session(connection_index: usize, session: &ConnectionSession) 
             }
 
             for kind in DbObjectKind::ordered() {
-                let objects = schema.objects_of_kind(kind).cloned().collect::<Vec<_>>();
-                if objects.is_empty() {
+                let object_count = schema.object_count(kind);
+                if object_count == 0 {
                     continue;
                 }
 
@@ -4238,7 +4386,7 @@ fn build_rows_for_session(connection_index: usize, session: &ConnectionSession) 
                         group_depth,
                         true,
                         group_expanded,
-                        Some(objects.len().to_string()),
+                        Some(object_count.to_string()),
                     ),
                     key: TreeNodeKey::Group {
                         connection: connection_index,
@@ -4252,6 +4400,23 @@ fn build_rows_for_session(connection_index: usize, session: &ConnectionSession) 
                     continue;
                 }
 
+                let group_loaded = session.loaded_groups.contains(&(
+                    database.name.clone(),
+                    schema.name.clone(),
+                    kind,
+                ));
+                if !group_loaded {
+                    continue;
+                }
+
+                let objects = session
+                    .app
+                    .objects_for_schema(&database.name, &schema.name)
+                    .unwrap_or(&[])
+                    .iter()
+                    .filter(|object| object.kind == kind)
+                    .cloned()
+                    .collect::<Vec<_>>();
                 for object in objects {
                     rows.push(TreeEntry {
                         row: TreeRow::new(
@@ -4272,6 +4437,19 @@ fn build_rows_for_session(connection_index: usize, session: &ConnectionSession) 
     }
 
     rows
+}
+
+fn first_object_group_with_objects(
+    summary: &CatalogSummary,
+) -> Option<(String, String, DbObjectKind)> {
+    summary.databases.iter().find_map(|database| {
+        database.schemas.iter().find_map(|schema| {
+            DbObjectKind::ordered().into_iter().find_map(|kind| {
+                (schema.object_count(kind) > 0)
+                    .then(|| (database.name.clone(), schema.name.clone(), kind))
+            })
+        })
+    })
 }
 
 fn toggle_set<T>(set: &mut BTreeSet<T>, value: T)

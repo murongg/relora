@@ -119,6 +119,24 @@ impl DbObjectKind {
         }
     }
 
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::Table => "table",
+            Self::View => "view",
+            Self::ForeignTable => "foreign-table",
+        }
+    }
+
+    pub fn from_wire_name(value: &str) -> Option<Self> {
+        match value {
+            "table" | "tables" => Some(Self::Table),
+            "view" | "views" => Some(Self::View),
+            "foreign-table" | "foreign_table" | "foreign table" | "foreign-tables"
+            | "foreign_tables" | "foreign tables" => Some(Self::ForeignTable),
+            _ => None,
+        }
+    }
+
     pub fn ordered() -> [Self; 3] {
         [Self::Table, Self::View, Self::ForeignTable]
     }
@@ -129,6 +147,11 @@ pub struct Catalog {
     pub databases: Vec<DatabaseEntry>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct CatalogSummary {
+    pub databases: Vec<DatabaseSummary>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DatabaseEntry {
     pub name: String,
@@ -136,10 +159,29 @@ pub struct DatabaseEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DatabaseSummary {
+    pub name: String,
+    pub schemas: Vec<SchemaSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SchemaEntry {
     pub database: String,
     pub name: String,
     pub objects: Vec<DbObjectRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SchemaSummary {
+    pub database: String,
+    pub name: String,
+    pub object_counts: Vec<ObjectKindCount>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectKindCount {
+    pub kind: DbObjectKind,
+    pub count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,6 +221,111 @@ impl DatabaseEntry {
 
     pub fn object_count(&self) -> usize {
         self.schemas.iter().map(|schema| schema.objects.len()).sum()
+    }
+}
+
+impl CatalogSummary {
+    pub fn as_catalog_with_unloaded_objects(&self) -> Catalog {
+        Catalog {
+            databases: self
+                .databases
+                .iter()
+                .map(|database| DatabaseEntry {
+                    name: database.name.clone(),
+                    schemas: database
+                        .schemas
+                        .iter()
+                        .map(|schema| SchemaEntry {
+                            database: schema.database.clone(),
+                            name: schema.name.clone(),
+                            objects: Vec::new(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
+    pub fn schema_count(&self) -> usize {
+        self.databases
+            .iter()
+            .map(|database| database.schemas.len())
+            .sum()
+    }
+
+    pub fn object_count(&self) -> usize {
+        self.databases
+            .iter()
+            .map(DatabaseSummary::object_count)
+            .sum()
+    }
+
+    pub fn find_schema(&self, database_name: &str, schema_name: &str) -> Option<&SchemaSummary> {
+        self.databases
+            .iter()
+            .find(|database| database.name == database_name)?
+            .schemas
+            .iter()
+            .find(|schema| schema.name == schema_name)
+    }
+}
+
+impl DatabaseSummary {
+    pub fn object_count(&self) -> usize {
+        self.schemas
+            .iter()
+            .map(SchemaSummary::total_object_count)
+            .sum()
+    }
+}
+
+impl SchemaSummary {
+    pub fn object_count(&self, kind: DbObjectKind) -> usize {
+        self.object_counts
+            .iter()
+            .find(|entry| entry.kind == kind)
+            .map(|entry| entry.count)
+            .unwrap_or_default()
+    }
+
+    pub fn total_object_count(&self) -> usize {
+        self.object_counts.iter().map(|entry| entry.count).sum()
+    }
+}
+
+impl From<&Catalog> for CatalogSummary {
+    fn from(value: &Catalog) -> Self {
+        Self {
+            databases: value
+                .databases
+                .iter()
+                .map(|database| DatabaseSummary {
+                    name: database.name.clone(),
+                    schemas: database
+                        .schemas
+                        .iter()
+                        .map(|schema| SchemaSummary {
+                            database: schema.database.clone(),
+                            name: schema.name.clone(),
+                            object_counts: DbObjectKind::ordered()
+                                .into_iter()
+                                .map(|kind| ObjectKindCount {
+                                    kind,
+                                    count: schema.object_count(kind),
+                                })
+                                .filter(|entry| entry.count > 0)
+                                .collect(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<Catalog> for CatalogSummary {
+    fn from(value: Catalog) -> Self {
+        Self::from(&value)
     }
 }
 
@@ -261,6 +408,31 @@ pub trait DatabaseDriver: Send {
     }
     fn connection_label(&self) -> &str;
     fn load_catalog(&mut self) -> Result<Catalog>;
+    fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
+        self.load_catalog().map(CatalogSummary::from)
+    }
+    fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
+        let catalog = self.load_catalog()?;
+        catalog
+            .databases
+            .into_iter()
+            .find(|entry| entry.name == database)
+            .and_then(|entry| entry.schemas.into_iter().find(|entry| entry.name == schema))
+            .map(|schema| schema.objects)
+            .ok_or_else(|| anyhow::anyhow!("schema not found: {database}.{schema}"))
+    }
+    fn load_schema_objects_of_kind(
+        &mut self,
+        database: &str,
+        schema: &str,
+        kind: DbObjectKind,
+    ) -> Result<Vec<DbObjectRef>> {
+        Ok(self
+            .load_schema_objects(database, schema)?
+            .into_iter()
+            .filter(|object| object.kind == kind)
+            .collect())
+    }
     fn load_preview_page(
         &mut self,
         table: &DbObjectRef,

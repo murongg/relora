@@ -380,7 +380,8 @@ pub(super) fn handle_command_palette_key(app: &mut WorkspaceApp, key: KeyEvent) 
 }
 
 fn should_open_help_overlay(app: &WorkspaceApp, key: KeyEvent) -> bool {
-    !(key.modifiers
+    !(key
+        .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
         || (app.active_right_tab() == RightPaneTab::Sql
             && app.is_editor_open()

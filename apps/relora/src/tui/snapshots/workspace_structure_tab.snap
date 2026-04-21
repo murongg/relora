@@ -7,6 +7,8 @@
 │                                        ││Target: mock://postgres                                                                         │
 │                                        ││Database: postgres                                                                              │
 │                                        ││Databases: 1 | Schemas: 1 | Objects: 1                                                          │
+│                                        ││Dialect: double quotes | EXPLAIN + ANALYZE | RETURNING                                          │
+│                                        ││Features: completion | templates | staged CRUD                                                  │
 │                                        ││Object: postgres.public.users (Table)                                                           │
 │                                        │└────────────────────────────────────────────────────────────────────────────────────────────────┘
 │                                        │┌Structure public.users──────────────────────────────────────────────────────────────────────────┐
@@ -14,8 +16,6 @@
 │                                        ││>> 1      id           integer  NO       YES      PK                                            │
 │                                        ││   2      email        text     NO                                                              │
 │                                        ││   3      display_name text     YES                                                             │
-│                                        ││                                                                                                │
-│                                        ││                                                                                                │
 │                                        ││                                                                                                │
 │                                        ││                                                                                                │
 │                                        ││                                                                                                │

@@ -938,6 +938,7 @@ impl WorkspaceApp {
             selected_connection_label: self.selected_connection_label(),
             selected_database_name: self.selected_database_name(),
             selected_connection_kind: self.selected_connection_kind(),
+            selected_connection_capabilities: selected_session.map(|session| session.capabilities),
             selected_connection_read_only: selected_session
                 .map(|session| session.read_only)
                 .unwrap_or(false),

@@ -1,5 +1,5 @@
 use super::*;
-use relora_core::db::DbObjectRef;
+use relora_core::db::{DbObjectRef, DriverCapabilities, ExplainFlavor, IdentifierQuoteStyle};
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &AppShell) {
     match app {
@@ -28,7 +28,7 @@ pub(super) fn draw_workspace(frame: &mut Frame<'_>, app: &WorkspaceApp) {
     }
 
     if view.help_overlay_visible {
-        draw_help_overlay(frame, frame.area());
+        draw_help_overlay(frame, frame.area(), view);
     }
 
     if let Some(data_filter) = view.data_filter {
@@ -902,6 +902,21 @@ pub(super) fn draw_summary(frame: &mut Frame<'_>, area: Rect, view: WorkspaceVie
         lines.push(Line::from("Worker: busy"));
     }
 
+    if let Some(capabilities) = view.selected_connection_capabilities {
+        lines.push(Line::from(format!(
+            "Dialect: {} | {} | {}",
+            identifier_quote_style_label(capabilities),
+            explain_capability_label(capabilities),
+            returning_capability_label(capabilities)
+        )));
+        lines.push(Line::from(format!(
+            "Features: {} | {} | {}",
+            support_label("completion", capabilities.supports_sql_completion),
+            support_label("templates", capabilities.supports_crud_templates),
+            support_label("staged CRUD", capabilities.supports_staged_crud)
+        )));
+    }
+
     if let Some(object) = view.selected_object {
         lines.push(Line::from(format!(
             "Object: {} ({})",
@@ -1370,7 +1385,7 @@ fn push_help_section(
     for (keys, description) in shortcuts {
         lines.push(Line::from(vec![
             Span::styled(
-                format!("{keys:<14}"),
+                format!("{keys:<12} "),
                 Style::default()
                     .fg(TEXT_STRONG)
                     .add_modifier(Modifier::BOLD),
@@ -1380,7 +1395,7 @@ fn push_help_section(
     }
 }
 
-pub(super) fn draw_help_overlay(frame: &mut Frame<'_>, area: Rect) {
+pub(super) fn draw_help_overlay_static(frame: &mut Frame<'_>, area: Rect) {
     let popup = centered_rect(
         HELP_OVERLAY_WIDTH_PERCENT,
         HELP_OVERLAY_HEIGHT_PERCENT,
@@ -1392,18 +1407,79 @@ pub(super) fn draw_help_overlay(frame: &mut Frame<'_>, area: Rect) {
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
-    let mut lines = Vec::new();
-    push_help_section(&mut lines, HELP_SECTION_GLOBAL, &HELP_GLOBAL_SHORTCUTS);
-    push_help_section(&mut lines, HELP_SECTION_DATA, &HELP_DATA_SHORTCUTS);
-    push_help_section(&mut lines, HELP_SECTION_SQL, &HELP_SQL_SHORTCUTS);
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(5)])
+        .split(inner);
+    let shortcut_columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+        .split(sections[0]);
+
+    let mut left_lines = Vec::new();
+    push_help_section(&mut left_lines, HELP_SECTION_GLOBAL, &HELP_GLOBAL_SHORTCUTS);
+    push_help_section(&mut left_lines, HELP_SECTION_DATA, &HELP_DATA_SHORTCUTS);
+    let left = Paragraph::new(left_lines).wrap(Wrap { trim: false });
+    frame.render_widget(left, shortcut_columns[0]);
+
+    let mut right_lines = Vec::new();
+    push_help_section(&mut right_lines, HELP_SECTION_SQL, &HELP_SQL_SHORTCUTS);
     push_help_section(
-        &mut lines,
+        &mut right_lines,
         HELP_SECTION_STRUCTURE,
         &HELP_STRUCTURE_SHORTCUTS,
     );
+    let right = Paragraph::new(right_lines).wrap(Wrap { trim: false });
+    frame.render_widget(right, shortcut_columns[1]);
 
-    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
-    frame.render_widget(body, inner);
+    let mut capability_lines = Vec::new();
+    push_help_section(
+        &mut capability_lines,
+        HELP_SECTION_DRIVER_SUPPORT,
+        &HELP_DRIVER_SUPPORT_ROWS,
+    );
+    let capabilities = Paragraph::new(capability_lines).wrap(Wrap { trim: false });
+    frame.render_widget(capabilities, sections[1]);
+}
+
+pub(super) fn draw_help_overlay(frame: &mut Frame<'_>, area: Rect, _view: WorkspaceView<'_>) {
+    draw_help_overlay_static(frame, area);
+}
+
+fn identifier_quote_style_label(capabilities: DriverCapabilities) -> &'static str {
+    match capabilities.identifier_quote_style {
+        IdentifierQuoteStyle::DoubleQuote => "double quotes",
+        IdentifierQuoteStyle::Backtick => "backticks",
+    }
+}
+
+fn explain_capability_label(capabilities: DriverCapabilities) -> &'static str {
+    match (
+        capabilities.supports_explain,
+        capabilities.explain_flavor,
+        capabilities.supports_explain_analyze,
+    ) {
+        (false, _, _) => "no EXPLAIN",
+        (true, ExplainFlavor::ExplainQueryPlan, _) => "QUERY PLAN",
+        (true, ExplainFlavor::Explain, true) => "EXPLAIN + ANALYZE",
+        (true, ExplainFlavor::Explain, false) => "EXPLAIN only",
+    }
+}
+
+fn returning_capability_label(capabilities: DriverCapabilities) -> &'static str {
+    if capabilities.supports_returning {
+        "RETURNING"
+    } else {
+        "no RETURNING"
+    }
+}
+
+fn support_label(name: &'static str, supported: bool) -> String {
+    if supported {
+        name.to_string()
+    } else {
+        format!("no {name}")
+    }
 }
 
 pub(super) fn draw_sql_history(frame: &mut Frame<'_>, area: Rect, history: SqlHistoryView<'_>) {

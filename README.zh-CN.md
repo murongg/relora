@@ -140,6 +140,23 @@ Relora 当前支持：
 - `relora-driver-mysql`
 - `relora-driver-sqlite`
 
+这些支持信息在 Relora 里也能直接看到：
+
+- 按 `?` / `F1` 打开键盘帮助和 driver support 摘要
+- 查看右侧 `Selection` 区域里的当前连接能力摘要，包括 quoting、`EXPLAIN` 和 `RETURNING`
+
+## 能力矩阵
+
+| 能力 | PostgreSQL | MySQL / MariaDB | SQLite |
+| --- | --- | --- | --- |
+| 标识符引用 | 双引号 | 反引号 | 双引号 |
+| SQL 自动补全 | 是 | 是 | 是 |
+| CRUD 模板 | 是，带 `RETURNING *` | 是，不带 `RETURNING` | 是，不带 `RETURNING` |
+| staged 行编辑预览 | 是 | 是，自动回退到 `UPDATE + SELECT` | 是，自动回退到 `UPDATE + SELECT` |
+| `EXPLAIN` | `EXPLAIN` | `EXPLAIN` | `EXPLAIN QUERY PLAN` |
+| `EXPLAIN ANALYZE` | 是 | 否 | 否 |
+| 复制 `WHERE` 条件 | 按 driver 使用正确 quoting | 按 driver 使用正确 quoting | 按 driver 使用正确 quoting |
+
 ## 你能得到什么
 
 - 多连接启动页
@@ -237,7 +254,7 @@ cargo bench -p relora --bench tui_render_hot_paths -- --quick
 | `F6` / `F7` | 上一个 / 下一个 SQL tab |
 | `F8` / `F9` | 上一个 / 下一个结果集 |
 | `F10` 或 `Ctrl-R` | 打开 SQL history |
-| `F11` / `F12` | `EXPLAIN` / `EXPLAIN ANALYZE` |
+| `F11` / `F12` | `EXPLAIN` / 支持时执行 `EXPLAIN ANALYZE` |
 | `Ctrl-G` | 提交 staged CRUD |
 
 ### Row Inspector

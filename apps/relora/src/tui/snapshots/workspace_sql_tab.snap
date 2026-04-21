@@ -7,13 +7,14 @@
 │                                        ││Target: mock://postgres                                                                         │
 │                                        ││Database: postgres                                                                              │
 │                                        ││Databases: 1 | Schemas: 1 | Objects: 1                                                          │
+│                                        ││Dialect: double quotes | EXPLAIN + ANALYZE | RETURNING                                          │
+│                                        ││Features: completion | templates | staged CRUD                                                  │
 │                                        ││Object: postgres.public.release_runs (Table)                                                    │
 │                                        │└────────────────────────────────────────────────────────────────────────────────────────────────┘
 │                                        │┌* SQL Editor (postgres.public.release_runs) | Tab 1/1 | Result 1/1──────────────────────────────┐
 │                                        ││Tabs: [*SQL Editor (postgres.public.release_runs)]                                              │
 │                                        ││Results: [*Result 1 (2 row(s))]                                                                 │
 │                                        ││select id, state, updated_at from release_runs;                                                 │
-│                                        ││                                                                                                │
 │                                        ││                                                                                                │
 │                                        ││                                                                                                │
 │                                        ││                                                                                                │
@@ -25,8 +26,7 @@
 │                                        ││   2      done     2026-04-21 09:58                                                             │
 │                                        ││                                                                                                │
 │                                        ││                                                                                                │
-│                                        ││                                                                                                │
 └────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌Status────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│Query returned 2 row(s). | SQL editor: Tab/Shift-Tab cycle, Ctrl-Enter current stmt, F10 history, F11 explain                             │
+│Query returned 2 row(s). | SQL editor: Tab/Shift-Tab cycle, Ctrl-Enter current stmt, F10 history, F11/F12 explain                         │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

@@ -13,6 +13,7 @@ use relora_core::db::{
 
 #[derive(Debug)]
 struct MockDriver {
+    kind: DatabaseKind,
     catalogs: VecDeque<Catalog>,
     previews: VecDeque<TablePreview>,
     executions: VecDeque<Vec<SqlExecutionResult>>,
@@ -44,6 +45,7 @@ impl BlockingPreviewDriver {
 impl MockDriver {
     fn new(catalogs: Vec<Catalog>, previews: Vec<TablePreview>) -> Self {
         Self {
+            kind: DatabaseKind::Postgres,
             catalogs: VecDeque::from(catalogs),
             previews: VecDeque::from(previews),
             executions: VecDeque::new(),
@@ -54,11 +56,16 @@ impl MockDriver {
         self.executions = VecDeque::from(executions);
         self
     }
+
+    fn with_kind(mut self, kind: DatabaseKind) -> Self {
+        self.kind = kind;
+        self
+    }
 }
 
 impl DatabaseDriver for MockDriver {
     fn kind(&self) -> DatabaseKind {
-        DatabaseKind::Postgres
+        self.kind
     }
 
     fn connection_label(&self) -> &str {
@@ -723,6 +730,9 @@ fn help_overlay_renders_workspace_shortcuts() -> Result<()> {
     assert!(rendered.contains("F2 / Alt-1"));
     assert!(rendered.contains("Ctrl-P"));
     assert!(rendered.contains("Data"));
+    assert!(rendered.contains("Driver Support"));
+    assert!(rendered.contains("PostgreSQL"));
+    assert!(rendered.contains("QUERY PLAN"));
     Ok(())
 }
 
@@ -912,6 +922,40 @@ fn workspace_summary_surfaces_read_only_mode() -> Result<()> {
         .join("\n");
 
     assert!(rendered.contains("Mode: read-only"));
+    Ok(())
+}
+
+#[test]
+fn workspace_summary_surfaces_current_driver_capabilities() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "mysql".to_string(),
+        driver: Box::new(
+            MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+            )
+            .with_kind(DatabaseKind::MySql),
+        ),
+    }];
+    let app = WorkspaceApp::bootstrap(bootstraps, 50)?;
+
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend)?;
+    terminal.draw(|frame| draw(frame, &AppShell::Workspace(app.into())))?;
+
+    let rendered = (0..terminal.backend().buffer().area.height)
+        .map(|y| {
+            (0..terminal.backend().buffer().area.width)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Dialect: backticks"));
+    assert!(rendered.contains("EXPLAIN only"));
+    assert!(rendered.contains("no RETURNING"));
+    assert!(rendered.contains("Features: completion | templates | staged CRUD"));
     Ok(())
 }
 

@@ -175,7 +175,7 @@ fn render_row_inspector_view(
 fn render_help_overlay_view(width: u16, height: u16) -> Result<String> {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend)?;
-    terminal.draw(|frame| draw_help_overlay(frame, frame.area()))?;
+    terminal.draw(|frame| draw_help_overlay_static(frame, frame.area()))?;
 
     Ok(rendered_buffer(terminal.backend().buffer()))
 }
@@ -191,11 +191,16 @@ fn rendered_buffer(buffer: &ratatui::buffer::Buffer) -> String {
         .join("\n")
 }
 
+fn normalize_snapshot_text(input: &str) -> String {
+    input.replace("\r\n", "\n")
+}
+
 fn assert_matches_snapshot(name: &str, actual: &str) -> Result<()> {
     let path = snapshot_path(name);
+    let actual = normalize_snapshot_text(actual);
     if std::env::var_os("RELORA_UPDATE_TUI_SNAPSHOTS").is_some() {
         fs::create_dir_all(snapshot_dir())?;
-        fs::write(&path, actual)?;
+        fs::write(&path, &actual)?;
     }
 
     let expected = fs::read_to_string(&path).map_err(|error| {
@@ -204,6 +209,7 @@ fn assert_matches_snapshot(name: &str, actual: &str) -> Result<()> {
             path.display()
         )
     })?;
+    let expected = normalize_snapshot_text(&expected);
     assert_eq!(expected, actual, "snapshot mismatch for {}", path.display());
     Ok(())
 }
@@ -397,4 +403,12 @@ fn row_inspector_golden_snapshot() -> Result<()> {
 fn help_overlay_golden_snapshot() -> Result<()> {
     let rendered = help_overlay_snapshot_render()?;
     assert_matches_snapshot("workspace_help_overlay", &rendered)
+}
+
+#[test]
+fn snapshot_text_normalization_handles_windows_line_endings() {
+    assert_eq!(
+        normalize_snapshot_text("first\r\nsecond\r\nthird"),
+        "first\nsecond\nthird"
+    );
 }

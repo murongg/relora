@@ -1,28 +1,28 @@
                                                                                                               
-                                                                                                              
-                                                                                                              
-                                                                                                              
-              ┌Keyboard Help | Esc close───────────────────────────────────────────────────────┐              
-              │Global                                                                          │              
-              │F1 / ?        Open or close keyboard help                                       │              
-              │Ctrl-P        Open command palette                                              │              
-              │F2 / Alt-1    Focus Data tab                                                    │              
-              │F3 / Alt-2    Focus SQL tab                                                     │              
-              │F4 / Alt-3    Focus Structure tab                                               │              
-              │                                                                                │              
-              │Data                                                                            │              
-              │Tab           Cycle between assets, grid, and editor                            │              
-              │/             Open safe data filter                                             │              
-              │n / p         Load next or previous preview page                                │              
-              │y / Y / w     Copy row, cell, or WHERE clause                                   │              
-              │i             Stage an edit for the selected cell                               │              
-              │                                                                                │              
-              │SQL                                                                             │              
-              │e             Open SQL editor from the browser                                  │              
-              │Ctrl-Enter    Run the statement under the cursor                                │              
-              │F10 / Ctrl-R  Open SQL history                                                  │              
-              └────────────────────────────────────────────────────────────────────────────────┘              
-                                                                                                              
-                                                                                                              
-                                                                                                              
+          ┌Keyboard Help | Esc close───────────────────────────────────────────────────────────────┐          
+          │Global                                        SQL                                       │          
+          │F1 / ?       Open or close help               e            Open SQL editor from browser │          
+          │Ctrl-P       Open command palette             Ctrl-Enter   Run statement under cursor   │          
+          │F2 / Alt-1   Focus Data tab                   F10 / Ctrl-R Open SQL history             │          
+          │F3 / Alt-2   Focus SQL tab                    F11 / F12    Explain / analyze when       │          
+          │F4 / Alt-3   Focus Structure tab              supported                                 │          
+          │                                              Tab          Cycle editor, results, and   │          
+          │Data                                          assets                                    │          
+          │Tab          Cycle assets, grid, and editor                                             │          
+          │/            Open data filter                 Structure                                 │          
+          │n / p        Load next or previous page       F4 / Alt-3   Switch to structure tab      │          
+          │y / Y / w    Copy row, cell, or WHERE         Tab          Focus structure grid         │          
+          │i            Stage selected cell edit         Enter        Inspect selected field or row│          
+          │                                              [ / ] / =    Resize or reset column width │          
+          │                                                                                        │          
+          │                                                                                        │          
+          │                                                                                        │          
+          │                                                                                        │          
+          │                                                                                        │          
+          │Driver Support                                                                          │          
+          │PostgreSQL   RETURNING | staged CRUD | ANALYZE                                          │          
+          │MySQL/MariaDB backticks | EXPLAIN | no RETURNING                                        │          
+          │SQLite       QUERY PLAN | no ANALYZE | no RETURNING                                     │          
+          │                                                                                        │          
+          └────────────────────────────────────────────────────────────────────────────────────────┘          
                                                                                                               

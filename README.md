@@ -140,6 +140,23 @@ Database support is shipped through sidecar binaries:
 - `relora-driver-mysql`
 - `relora-driver-sqlite`
 
+The same support profile is visible inside Relora:
+
+- open `?` / `F1` for the keyboard help and driver support summary
+- check the `Selection` panel for the active connection's quoting, `EXPLAIN`, and `RETURNING` profile
+
+## Capability Matrix
+
+| Capability | PostgreSQL | MySQL / MariaDB | SQLite |
+| --- | --- | --- | --- |
+| Identifier quoting | Double quotes | Backticks | Double quotes |
+| SQL completion | Yes | Yes | Yes |
+| CRUD templates | Yes, with `RETURNING *` | Yes, without `RETURNING` | Yes, without `RETURNING` |
+| Staged row edit preview | Yes | Yes, with `UPDATE + SELECT` fallback | Yes, with `UPDATE + SELECT` fallback |
+| `EXPLAIN` | `EXPLAIN` | `EXPLAIN` | `EXPLAIN QUERY PLAN` |
+| `EXPLAIN ANALYZE` | Yes | No | No |
+| Copy `WHERE` clause | Driver-aware quoting | Driver-aware quoting | Driver-aware quoting |
+
 ## What You Get
 
 - multi-connection launcher
@@ -237,7 +254,7 @@ These numbers are intended as a regression baseline, not a hard performance guar
 | `F6` / `F7` | Previous or next SQL tab |
 | `F8` / `F9` | Previous or next result set |
 | `F10` or `Ctrl-R` | Open SQL history |
-| `F11` / `F12` | `EXPLAIN` / `EXPLAIN ANALYZE` |
+| `F11` / `F12` | `EXPLAIN` / `EXPLAIN ANALYZE` when supported |
 | `Ctrl-G` | Commit staged CRUD |
 
 ### Row Inspector

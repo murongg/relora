@@ -108,7 +108,7 @@ pub(super) const FOOTER_SQL_RESULTS_HELP: &str =
 pub(super) const FOOTER_SQL_ASSETS_HELP: &str =
     "SQL assets: j/k browse, Enter expand, Tab/Shift-Tab cycle, F2 Data, F4 Structure";
 pub(super) const FOOTER_SQL_EDITOR_HELP: &str =
-    "SQL editor: Tab/Shift-Tab cycle, Ctrl-Enter current stmt, F10 history, F11 explain";
+    "SQL editor: Tab/Shift-Tab cycle, Ctrl-Enter current stmt, F10 history, F11/F12 explain";
 pub(super) const FOOTER_SQL_TAB_HELP: &str =
     "SQL tab: e open editor, F2 Data, F4 Structure, Ctrl-P command";
 pub(super) const FOOTER_STRUCTURE_GRID_HELP: &str =
@@ -121,7 +121,7 @@ pub(super) const FOOTER_DATA_HELP: &str =
     "Data tab: / filter, n/p page, F3 SQL, F4 Structure, j/k assets, Tab grid, e SQL, F10 history";
 
 pub(super) const HELP_GLOBAL_SHORTCUTS: [(&str, &str); 5] = [
-    ("F1 / ?", "Open or close keyboard help"),
+    ("F1 / ?", "Open or close help"),
     ("Ctrl-P", "Open command palette"),
     ("F2 / Alt-1", "Focus Data tab"),
     ("F3 / Alt-2", "Focus SQL tab"),
@@ -129,24 +129,30 @@ pub(super) const HELP_GLOBAL_SHORTCUTS: [(&str, &str); 5] = [
 ];
 
 pub(super) const HELP_DATA_SHORTCUTS: [(&str, &str); 5] = [
-    ("Tab", "Cycle between assets, grid, and editor"),
-    ("/", "Open safe data filter"),
-    ("n / p", "Load next or previous preview page"),
-    ("y / Y / w", "Copy row, cell, or WHERE clause"),
-    ("i", "Stage an edit for the selected cell"),
+    ("Tab", "Cycle assets, grid, and editor"),
+    ("/", "Open data filter"),
+    ("n / p", "Load next or previous page"),
+    ("y / Y / w", "Copy row, cell, or WHERE"),
+    ("i", "Stage selected cell edit"),
 ];
 
 pub(super) const HELP_SQL_SHORTCUTS: [(&str, &str); 5] = [
-    ("e", "Open SQL editor from the browser"),
-    ("Ctrl-Enter", "Run the statement under the cursor"),
+    ("e", "Open SQL editor from browser"),
+    ("Ctrl-Enter", "Run statement under cursor"),
     ("F10 / Ctrl-R", "Open SQL history"),
-    ("F11 / F12", "Explain or Explain Analyze"),
+    ("F11 / F12", "Explain / analyze when supported"),
     ("Tab", "Cycle editor, results, and assets"),
 ];
 
 pub(super) const HELP_STRUCTURE_SHORTCUTS: [(&str, &str); 4] = [
-    ("F4 / Alt-3", "Switch to structure"),
-    ("Tab", "Focus the structure grid"),
-    ("Enter", "Inspect the current field or row"),
-    ("[ / ] / =", "Resize or reset selected column width"),
+    ("F4 / Alt-3", "Switch to structure tab"),
+    ("Tab", "Focus structure grid"),
+    ("Enter", "Inspect selected field or row"),
+    ("[ / ] / =", "Resize or reset column width"),
+];
+
+pub(super) const HELP_DRIVER_SUPPORT_ROWS: [(&str, &str); 3] = [
+    ("PostgreSQL", "RETURNING | staged CRUD | ANALYZE"),
+    ("MySQL/MariaDB", "backticks | EXPLAIN | no RETURNING"),
+    ("SQLite", "QUERY PLAN | no ANALYZE | no RETURNING"),
 ];

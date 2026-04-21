@@ -63,6 +63,7 @@ pub(super) const HELP_SECTION_GLOBAL: &str = "Global";
 pub(super) const HELP_SECTION_DATA: &str = "Data";
 pub(super) const HELP_SECTION_SQL: &str = "SQL";
 pub(super) const HELP_SECTION_STRUCTURE: &str = "Structure";
+pub(super) const HELP_SECTION_DRIVER_SUPPORT: &str = "Driver Support";
 
 pub(super) const EMPTY_GRID_MESSAGE: &str = "No rows available.";
 pub(super) const LOADING_PREVIEW_MESSAGE: &str = "Loading preview...";

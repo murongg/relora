@@ -1,60 +1,128 @@
+<p align="center">
+  <img src="assets/branding/relora-terminal-wordmark.svg" alt="Relora" width="560" />
+</p>
+
+<p align="center">
+  <strong>Keyboard-first terminal database workspace built with Rust and ratatui.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/murongg/relora/actions/workflows/ci.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/murongg/relora/ci.yml?branch=main&style=flat-square&logo=githubactions&label=ci" alt="CI status" />
+  </a>
+  <a href="https://github.com/murongg/relora/releases">
+    <img src="https://img.shields.io/github/v/release/murongg/relora?style=flat-square&label=release" alt="Latest release" />
+  </a>
+  <a href="https://www.npmjs.com/package/relora">
+    <img src="https://img.shields.io/npm/v/relora?style=flat-square&logo=npm" alt="npm version" />
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/github/license/murongg/relora?style=flat-square" alt="MIT license" />
+  </a>
+  <img src="https://img.shields.io/badge/rust-1.85%2B-dea584?style=flat-square&logo=rust" alt="Rust 1.85+" />
+</p>
+
+<p align="center">
+  English | <a href="README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/db.png" alt="Relora workspace screenshot showing the assets tree, tabs, and preview grid." width="1200" />
+</p>
+
 # Relora
 
-English | [简体中文](README.zh-CN.md)
+Relora is a terminal database workspace for people who want less GUI chrome and more direct control.
 
-Relora is a terminal database workspace built with Rust and `ratatui`.
+It keeps the common loop in one place:
 
-It is designed for keyboard-first database work: connect to multiple databases, browse structure, preview data, run SQL, and stage safe edits without leaving the terminal.
+- open one or more saved database connections
+- browse databases, schemas, tables, and structure
+- preview rows in a dense but keyboard-friendly grid
+- edit and execute SQL without leaving the terminal
+- stage row edits before committing SQL
 
-License: MIT.
+## Why Relora
 
-## What Relora Does
+Relora is built for the moments where opening a full GUI client feels heavier than the task itself.
 
-Relora is a terminal alternative to the “open a GUI client just to inspect a table or run a query” workflow.
-
-It is built for people who:
-
-- prefer terminal-native tools
-- manage more than one database connection
-- want browsing, preview, and SQL editing in one place
-- care about performance and low-overhead architecture
+- fast startup
+- keyboard-first interaction
+- multi-connection browsing in one workspace
+- sidecar drivers instead of linking every database client into the main app
 
 ## Features
 
-### Multi-connection workspace
+- **Multi-connection workspace**: open and browse one or many saved connections in the same session.
+- **Dense data preview**: inspect rows quickly with paging, filtering, copy flows, and row detail.
+- **Integrated SQL tab**: write SQL, run the current statement, reuse history, and inspect results.
+- **Structure view**: inspect columns and object metadata without leaving the workspace.
+- **Staged editing**: preview generated SQL before committing row-level changes.
+- **Sidecar drivers**: keep PostgreSQL, MySQL / MariaDB, and SQLite support outside the main TUI binary.
 
-- save and manage multiple named connections
-- open one or many connections in the same workspace
-- browse databases, schemas, and grouped objects from a left-side asset tree
+## Install
 
-### Data browsing
+### npm
 
-- preview tables and table-like objects in the `Data` tab
-- page through preview rows
-- inspect object columns in the `Structure` tab
-- open a row inspector for wide rows and long values
-- copy the current cell, row, or generated `WHERE` clause
+```bash
+npm install -g relora
+relora
+```
 
-### SQL workflow
+Or run it once without a global install:
 
-- built-in SQL editor
-- execute only the statement under the cursor by default
-- SQL history with search and rerun
-- SQL autocomplete for keywords, objects, and columns
-- multiple SQL tabs and multiple result sets
-- PostgreSQL `EXPLAIN` and `EXPLAIN ANALYZE`
+```bash
+npx relora
+```
 
-### Safer editing flow
+### curl
 
-- quick filtering from the `Data` tab
-- CRUD templates: `SELECT`, `INSERT`, `UPDATE`, `DELETE`
-- staged CRUD: edit a cell, preview generated SQL, then commit in a transaction
+```bash
+curl -fsSL https://raw.githubusercontent.com/murongg/relora/main/scripts/install.sh | sh
+```
 
-### Runtime model
+### source
 
-- one background worker per connection
-- async preview refresh, structure loading, and SQL execution
-- task deduplication, cancellation, and priority scheduling
+```bash
+cargo run -p relora
+```
+
+## Quick Start
+
+### 1. Launch the workspace
+
+```bash
+relora
+```
+
+Or open a connection directly:
+
+```bash
+relora --url postgresql://localhost:5432/postgres
+```
+
+### 2. Add a saved connection
+
+From the launcher:
+
+- `a` creates a connection
+- `e` edits the selected connection
+- `t` tests the selected connection
+- `Enter` launches the selected connection
+
+Saved connections live at:
+
+```text
+~/.config/relora/connections.json
+```
+
+### 3. Work inside the workspace
+
+- use the left asset tree to select a database object
+- use `F2`, `F3`, `F4` or `Alt-1`, `Alt-2`, `Alt-3` to switch `Data`, `SQL`, and `Structure`
+- use `/` to filter preview rows
+- use `F5` or `Ctrl-Enter` to run the current SQL statement
+- use `i` to stage a cell edit from the data grid
 
 ## Supported Databases
 
@@ -64,310 +132,98 @@ Relora currently supports:
 - MySQL / MariaDB
 - SQLite
 
-Support is provided through external sidecar drivers:
+Database support is shipped through sidecar binaries:
 
 - `relora-driver-postgres`
 - `relora-driver-mysql`
 - `relora-driver-sqlite`
 
-The main Relora binary does not link database client drivers directly.
+## What You Get
 
-## Install
+- multi-connection launcher
+- `Data`, `SQL`, and `Structure` tabs in one terminal view
+- SQL history, autocomplete, and statement-aware execution
+- row preview, copy flows, and quick filters
+- PostgreSQL `EXPLAIN` and `EXPLAIN ANALYZE`
+- staged CRUD with SQL preview before commit
 
-### npm
+## Keybindings
 
-For end users, the easiest path is npm:
+### Launcher
 
-```bash
-npm install -g relora
-relora
-```
-
-The npm package downloads a prebuilt Relora bundle for the current platform from GitHub Releases, including:
-
-- `relora`
-- `relora-driver-postgres`
-- `relora-driver-mysql`
-- `relora-driver-sqlite`
-
-You can also launch it without a global install:
-
-```bash
-npx relora
-```
-
-### curl (macOS / Linux)
-
-If you prefer a single shell installer:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/murongg/relora/main/scripts/install.sh | sh
-```
-
-The installer downloads the matching prebuilt release bundle into `~/.local/bin` by default.
-
-Useful overrides:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/murongg/relora/main/scripts/install.sh | RELORA_VERSION=0.1.0 sh
-curl -fsSL https://raw.githubusercontent.com/murongg/relora/main/scripts/install.sh | RELORA_INSTALL_DIR=/usr/local/bin sh
-```
-
-### From source
-
-For contributors and local development, the source workflow is still:
-
-```bash
-cargo run -p relora
-```
-
-To build all runtime binaries from source:
-
-```bash
-cargo build --release -p relora -p relora-driver-postgres -p relora-driver-mysql -p relora-driver-sqlite
-```
-
-## How to Use Relora
-
-### 1. Start Relora
-
-Open the launcher:
-
-```bash
-relora
-```
-
-Or from source:
-
-```bash
-cargo run -p relora
-```
-
-Open a single connection directly:
-
-```bash
-cargo run -p relora -- --url postgresql://postgres:postgres@localhost:5432/postgres
-```
-
-Open multiple named connections:
-
-```bash
-cargo run -p relora -- \
-  --connection pg=postgresql://postgres:postgres@localhost:5432/postgres \
-  --connection analytics=postgresql://postgres:postgres@localhost:5432/analytics
-```
-
-Use environment variables:
-
-```bash
-export RELORA_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres
-cargo run -p relora
-```
-
-Or:
-
-```bash
-export RELORA_CONNECTIONS='pg=postgresql://postgres:postgres@localhost:5432/postgres;analytics=postgresql://postgres:postgres@localhost:5432/analytics'
-cargo run -p relora
-```
-
-Saved connections are stored at:
-
-```text
-~/.config/relora/connections.json
-```
-
-### 2. Add or edit a connection
-
-If you start in launcher mode, press `a` to add a connection.
-
-The form supports:
-
-- Driver
-- Host / SQLite path
-- Port
-- Database
-- User
-- Password
-- URL override
-
-How it works:
-
-- if `URL override` is filled, Relora uses it directly
-- otherwise, Relora builds the URL from structured fields
-- the `database` field is optional for server-level connections
-
-Connection testing:
-
-- press `t` on the `Driver` field
-- or press `Ctrl-T` anywhere in the form
-
-### 3. Browse data and structure
-
-After launching a connection:
-
-1. use the left asset tree to pick a database, schema, and object
-2. use the `Data` tab to preview rows
-3. use the `Structure` tab to inspect columns and metadata
-4. press `Enter` on a row to open the row inspector
-
-### 4. Run SQL
-
-Open the SQL editor with:
-
-- `F3`
-- `Alt-2`
-- or `e` from the browser
-
-From there you can:
-
-- write SQL
-- execute the current statement with `F5` or `Ctrl-Enter`
-- switch SQL tabs and result sets
-- rerun previous SQL from history with `F10` or `Ctrl-R`
-- use `F11` / `F12` for `EXPLAIN` workflows
-
-### 5. Stage and commit edits
-
-From the data grid:
-
-1. move to a cell
-2. press `i`
-3. enter the new value
-4. press `Enter` to preview the generated SQL
-5. press `Ctrl-G` in the SQL tab to commit the staged transaction
-
-## Keybindings at a Glance
+| Key | Action |
+| --- | --- |
+| `j` / `k` | Move between saved connections |
+| `Space` | Mark or unmark a connection for multi-launch |
+| `a` | Create a connection |
+| `e` | Edit the selected connection |
+| `d` | Delete the selected connection |
+| `t` | Test the selected connection |
+| `Enter` | Launch the selected connection |
+| `q` / `Esc` | Quit or cancel |
 
 ### Global
 
-- `Tab` / `Shift-Tab`: switch focus between panes
-- `F2` or `Alt-1`: open `Data`
-- `F3` or `Alt-2`: open `SQL`
-- `F4` or `Alt-3`: open `Structure`
-- `Ctrl-P`: command palette
-- `F10` / `Ctrl-R`: SQL history
+| Key | Action |
+| --- | --- |
+| `Tab` / `Shift-Tab` | Rotate focus between panes |
+| `F2` or `Alt-1` | Open `Data` |
+| `F3` or `Alt-2` | Open `SQL` |
+| `F4` or `Alt-3` | Open `Structure` |
+| `Ctrl-P` | Open command palette |
+| `F10` or `Ctrl-R` | Open SQL history |
 
-### Browser
+### Assets and Browser
 
-- `j` / `k` or `Up` / `Down`: move selection
-- `Enter`, `Space`, `h`, `l`, `Left`, `Right`: expand or collapse
-- `e`: open SQL editor
-- `s` / `i` / `u` / `d`: generate CRUD templates
-- `r`: refresh
-- `c`: cancel tasks
+| Key | Action |
+| --- | --- |
+| `j` / `k` | Move selection |
+| `h` / `l` | Collapse or expand |
+| `Enter` / `Space` | Toggle the selected node |
+| `/` | Open data filter |
+| `e` | Open SQL editor |
+| `s` / `i` / `u` / `d` | Insert `SELECT` / `INSERT` / `UPDATE` / `DELETE` templates |
+| `r` | Refresh current selection |
+| `c` | Cancel running tasks |
+| `q` / `Esc` | Quit workspace or return focus |
 
-### Data grid
+### Data Grid
 
-- `j` / `k`: move rows
-- `h` / `l`: move columns
-- `PageUp` / `PageDown`: scroll by page
-- `n` / `p`: next / previous preview page
-- `y`: copy row
-- `Y`: copy cell
-- `w`: copy `WHERE` clause
-- `i`: stage cell edit
-- `f` / `F`: freeze columns / clear frozen columns
+| Key | Action |
+| --- | --- |
+| `j` / `k` | Move rows |
+| `h` / `l` | Move columns |
+| `Enter` | Open row inspector |
+| `/` | Filter current preview |
+| `n` / `p` | Next or previous preview page |
+| `y` / `Y` | Copy row or cell |
+| `w` | Copy generated `WHERE` clause |
+| `i` | Stage a cell edit |
+| `[` / `]` / `=` | Shrink, expand, or reset column width |
+| `f` / `F` | Freeze columns or clear frozen columns |
 
-### SQL editor
+### SQL Editor
 
-- `F5` or `Ctrl-Enter`: execute current statement
-- `F11`: `EXPLAIN`
-- `F12`: `EXPLAIN ANALYZE`
-- `Ctrl-T`: new SQL tab
-- `Ctrl-W`: close SQL tab
-- `F6` / `F7`: switch SQL tabs
-- `F8` / `F9`: switch result sets
-- `Ctrl-G`: commit staged CRUD
+| Key | Action |
+| --- | --- |
+| `Ctrl-Enter` or `F5` | Execute the current statement |
+| `Ctrl-T` | New SQL tab |
+| `Ctrl-W` | Close SQL tab |
+| `F6` / `F7` | Previous or next SQL tab |
+| `F8` / `F9` | Previous or next result set |
+| `F10` or `Ctrl-R` | Open SQL history |
+| `F11` / `F12` | `EXPLAIN` / `EXPLAIN ANALYZE` |
+| `Ctrl-G` | Commit staged CRUD |
 
-## Driver Sidecars
+### Row Inspector
 
-Relora does not run `cargo install` inside the TUI. End users should not need a Rust toolchain.
-
-For npm installs, sidecars are bundled into the downloaded runtime package automatically.
-
-For packagers and non-interactive smoke tests, use:
-
-```bash
-relora paths --json
-```
-
-Driver lookup order:
-
-- `RELORA_POSTGRES_DRIVER` / `RELORA_MYSQL_DRIVER` / `RELORA_SQLITE_DRIVER`
-- matching binary in `PATH`
-- matching binary next to the Relora executable
-- `~/.cargo/bin`
-- workspace `target/debug` or `target/release`
-
-## CLI Options
-
-```bash
-cargo run -p relora -- --help
-```
-
-- `--url`: single database URL
-- `--connection`: named connection in `name=url` form, repeatable
-- `--preview-limit`: preview row limit, default `100`
-
-## For Contributors
-
-### Monorepo layout
-
-```text
-.
-├── apps/
-│   └── relora/
-├── packages/
-│   └── relora-npm/
-├── scripts/
-│   └── package-release-bundle.cjs
-└── crates/
-    ├── relora-app/
-    ├── relora-core/
-    ├── relora-driver-mysql/
-    ├── relora-driver-postgres/
-    └── relora-driver-sqlite/
-```
-
-### Package responsibilities
-
-- `apps/relora`: executable app, CLI config, sidecar registry, TUI shell, and `ratatui` rendering
-- `packages/relora-npm`: npm installer package that downloads prebuilt Relora bundles
-- `scripts/package-release-bundle.cjs`: helper for creating versioned release bundles for npm installs
-- `crates/relora-app`: application state, workspace projection, SQL editor state, CRUD helpers, read-only UI views
-- `crates/relora-core`: shared database traits and domain models
-- `crates/relora-driver-postgres`: PostgreSQL sidecar
-- `crates/relora-driver-mysql`: MySQL / MariaDB sidecar
-- `crates/relora-driver-sqlite`: SQLite sidecar
-
-### Validation
-
-```bash
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-```
-
-### Build an npm release bundle
-
-After building release binaries, package them into the versioned archive expected by the npm installer:
-
-```bash
-cargo build --release -p relora -p relora-driver-postgres -p relora-driver-mysql -p relora-driver-sqlite
-node scripts/package-release-bundle.cjs --platform darwin --arch arm64
-```
-
-### Packaging notes
-
-For package-manager integration work, see [docs/packaging.md](docs/packaging.md). A source-build smoke test is also available:
-
-```bash
-scripts/smoke-test-source-build.sh
-```
-
-Maintainers can cut releases with `bumpp`:
-
-```bash
-npm install
-npm run release
-```
+| Key | Action |
+| --- | --- |
+| `Tab` | Switch between inspector panes |
+| `j` / `k` | Move or scroll |
+| `PgUp` / `PgDn` | Page the preview |
+| `Ctrl-U` / `Ctrl-D` | Scroll faster |
+| `y` / `Y` | Copy the current value |
+| `i` | Start editing from the current field |
+| `f` | Toggle raw or formatted display |
+| `q` / `Esc` | Close inspector |

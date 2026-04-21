@@ -1,60 +1,128 @@
+<p align="center">
+  <img src="assets/branding/relora-terminal-wordmark.svg" alt="Relora" width="560" />
+</p>
+
+<p align="center">
+  <strong>基于 Rust 和 ratatui 构建的键盘优先终端数据库工作台。</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/murongg/relora/actions/workflows/ci.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/murongg/relora/ci.yml?branch=main&style=flat-square&logo=githubactions&label=ci" alt="CI 状态" />
+  </a>
+  <a href="https://github.com/murongg/relora/releases">
+    <img src="https://img.shields.io/github/v/release/murongg/relora?style=flat-square&label=release" alt="最新版本" />
+  </a>
+  <a href="https://www.npmjs.com/package/relora">
+    <img src="https://img.shields.io/npm/v/relora?style=flat-square&logo=npm" alt="npm 版本" />
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/github/license/murongg/relora?style=flat-square" alt="MIT 许可证" />
+  </a>
+  <img src="https://img.shields.io/badge/rust-1.85%2B-dea584?style=flat-square&logo=rust" alt="Rust 1.85+" />
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> | 简体中文
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/db.png" alt="Relora 工作区截图，展示了资源树、标签页和数据预览表格。" width="1200" />
+</p>
+
 # Relora
 
-[English](README.md) | 简体中文
+Relora 是一个终端数据库工作台，适合那些不想为了看表、跑 SQL、做轻量编辑就切去打开 GUI 客户端的人。
 
-Relora 是一个基于 Rust 和 `ratatui` 构建的终端数据库工作台。
+它把最常见的数据库操作收在一个终端工作区里：
 
-它面向键盘优先的数据库工作流：在终端里同时完成多连接管理、结构浏览、数据预览、SQL 执行，以及相对安全的 staged 编辑。
+- 打开一个或多个保存过的数据库连接
+- 浏览数据库、schema、表和结构信息
+- 在高信息密度但键盘友好的表格里预览数据
+- 直接编写并执行 SQL
+- 先 staged，再提交行级编辑
 
-许可证：MIT。
+## 为什么是 Relora
 
-## Relora 是做什么的
+Relora 想解决的是“任务很轻，但 GUI 很重”的那种不协调感。
 
-Relora 想替代的是“为了看一张表、跑一条 SQL，就切去打开 GUI 客户端”的那类工作流。
+- 启动快
+- 键盘优先
+- 一个 workspace 里处理多连接
+- 使用 sidecar driver，而不是把所有数据库客户端都塞进主程序
 
-它更适合这样的人：
+## 功能特性
 
-- 偏好终端原生工具
-- 需要管理多个数据库连接
-- 希望把浏览、预览、编辑放在一个工作区里
-- 在意性能和更轻量的架构
+- **多连接工作区**：在同一个 session 里打开并浏览一个或多个保存的连接。
+- **高密度数据预览**：支持分页、过滤、复制和 row detail，适合快速检查数据。
+- **内置 SQL tab**：直接写 SQL、执行当前 statement、复用历史记录、查看结果集。
+- **结构视图**：不离开工作区就能查看字段和对象元数据。
+- **staged 编辑**：先预览生成的 SQL，再提交行级修改。
+- **sidecar driver 架构**：把 PostgreSQL、MySQL / MariaDB、SQLite 支持放在主 TUI 之外。
 
-## 功能概览
+## 安装
 
-### 多连接工作区
+### npm
 
-- 保存并管理多个命名连接
-- 在同一个 workspace 里打开一个或多个连接
-- 通过左侧资源树浏览数据库、schema 与对象分组
+```bash
+npm install -g relora
+relora
+```
 
-### 数据浏览
+也可以不全局安装，直接运行：
 
-- 在 `Data` tab 预览表类对象数据
-- 支持预览分页
-- 在 `Structure` tab 查看字段与元数据
-- 用 row inspector 查看宽表和长文本
-- 复制当前 cell、当前 row 或自动生成的 `WHERE` 条件
+```bash
+npx relora
+```
 
-### SQL 工作流
+### curl
 
-- 内置 SQL 编辑器
-- 默认只执行光标所在 statement
-- SQL history 支持搜索和重跑
-- SQL 自动补全支持关键词、对象名和列名
-- 支持多个 SQL tab 和多个结果集
-- PostgreSQL `EXPLAIN` / `EXPLAIN ANALYZE`
+```bash
+curl -fsSL https://raw.githubusercontent.com/murongg/relora/main/scripts/install.sh | sh
+```
 
-### 更安全的编辑流程
+### 源码
 
-- 在 `Data` tab 中快速过滤数据
-- 生成 `SELECT`、`INSERT`、`UPDATE`、`DELETE` 模板
-- staged CRUD：先预览 SQL，再事务提交
+```bash
+cargo run -p relora
+```
 
-### 运行时模型
+## 快速开始
 
-- 每个连接独立后台 worker
-- 预览刷新、结构加载、SQL 执行都是异步的
-- 支持任务去重、取消和优先级调度
+### 1. 启动工作区
+
+```bash
+relora
+```
+
+或者直接打开一个连接：
+
+```bash
+relora --url postgresql://localhost:5432/postgres
+```
+
+### 2. 添加保存连接
+
+在启动页中：
+
+- `a` 新建连接
+- `e` 编辑当前连接
+- `t` 测试当前连接
+- `Enter` 启动当前连接
+
+保存的连接默认写在：
+
+```text
+~/.config/relora/connections.json
+```
+
+### 3. 在工作区里操作
+
+- 在左侧资源树里选择数据库对象
+- 用 `F2`、`F3`、`F4` 或 `Alt-1`、`Alt-2`、`Alt-3` 切换 `Data`、`SQL`、`Structure`
+- 用 `/` 过滤预览数据
+- 用 `F5` 或 `Ctrl-Enter` 执行当前 SQL statement
+- 在数据表格中按 `i` 发起 staged 编辑
 
 ## 当前支持的数据库
 
@@ -64,310 +132,98 @@ Relora 当前支持：
 - MySQL / MariaDB
 - SQLite
 
-这些能力都通过 external sidecar driver 提供：
+数据库能力通过 sidecar binary 提供：
 
 - `relora-driver-postgres`
 - `relora-driver-mysql`
 - `relora-driver-sqlite`
 
-Relora 主程序本身不会直接链接数据库客户端 driver。
+## 你能得到什么
 
-## 安装方式
+- 多连接启动页
+- 一个终端视图里的 `Data`、`SQL`、`Structure` 三个 tab
+- SQL history、自动补全和按 statement 执行
+- 行预览、复制和快速过滤
+- PostgreSQL `EXPLAIN` / `EXPLAIN ANALYZE`
+- staged CRUD，提交前先预览 SQL
 
-### npm
+## 快捷键
 
-对终端用户来说，最简单的安装方式是 npm：
+### 启动页
 
-```bash
-npm install -g relora
-relora
-```
-
-npm 包会在安装阶段从 GitHub Releases 下载当前平台对应的预编译 Relora bundle，其中包含：
-
-- `relora`
-- `relora-driver-postgres`
-- `relora-driver-mysql`
-- `relora-driver-sqlite`
-
-也可以不全局安装，直接运行：
-
-```bash
-npx relora
-```
-
-### curl（macOS / Linux）
-
-如果你更喜欢一条 shell 命令安装：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/murongg/relora/main/scripts/install.sh | sh
-```
-
-安装脚本默认会把当前平台匹配的预编译 release bundle 下载到 `~/.local/bin`。
-
-常用覆盖参数：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/murongg/relora/main/scripts/install.sh | RELORA_VERSION=0.1.0 sh
-curl -fsSL https://raw.githubusercontent.com/murongg/relora/main/scripts/install.sh | RELORA_INSTALL_DIR=/usr/local/bin sh
-```
-
-### 源码方式
-
-对贡献者和本地开发来说，源码启动方式仍然是：
-
-```bash
-cargo run -p relora
-```
-
-如果要从源码构建完整运行时二进制：
-
-```bash
-cargo build --release -p relora -p relora-driver-postgres -p relora-driver-mysql -p relora-driver-sqlite
-```
-
-## 怎么使用 Relora
-
-### 1. 启动 Relora
-
-打开启动页：
-
-```bash
-relora
-```
-
-或者从源码启动：
-
-```bash
-cargo run -p relora
-```
-
-直接打开单个连接：
-
-```bash
-cargo run -p relora -- --url postgresql://postgres:postgres@localhost:5432/postgres
-```
-
-一次打开多个命名连接：
-
-```bash
-cargo run -p relora -- \
-  --connection pg=postgresql://postgres:postgres@localhost:5432/postgres \
-  --connection analytics=postgresql://postgres:postgres@localhost:5432/analytics
-```
-
-也可以用环境变量：
-
-```bash
-export RELORA_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres
-cargo run -p relora
-```
-
-或者：
-
-```bash
-export RELORA_CONNECTIONS='pg=postgresql://postgres:postgres@localhost:5432/postgres;analytics=postgresql://postgres:postgres@localhost:5432/analytics'
-cargo run -p relora
-```
-
-保存的连接默认写入：
-
-```text
-~/.config/relora/connections.json
-```
-
-### 2. 添加或编辑连接
-
-如果你从 launcher 启动，按 `a` 可以新增连接。
-
-表单支持这些字段：
-
-- Driver
-- Host / SQLite path
-- Port
-- Database
-- User
-- Password
-- URL override
-
-行为规则：
-
-- 如果填写了 `URL override`，直接使用它
-- 如果没有填写，Relora 会根据结构化字段自动拼接 URL
-- `database` 字段对 server-level 连接不是必填
-
-测试连接：
-
-- 在 `Driver` 字段按 `t`
-- 或在表单任意位置按 `Ctrl-T`
-
-### 3. 浏览数据和结构
-
-连接启动后：
-
-1. 在左侧资源树里选择数据库、schema 和对象
-2. 在 `Data` tab 看预览数据
-3. 在 `Structure` tab 看字段结构
-4. 在数据行上按 `Enter` 打开 row inspector
-
-### 4. 执行 SQL
-
-打开 SQL 编辑器的方式：
-
-- `F3`
-- `Alt-2`
-- 或在浏览区按 `e`
-
-进入之后可以：
-
-- 编写 SQL
-- 用 `F5` 或 `Ctrl-Enter` 执行当前 statement
-- 切换 SQL tab 和结果集
-- 用 `F10` 或 `Ctrl-R` 打开 SQL history 重跑历史 SQL
-- 用 `F11` / `F12` 做 `EXPLAIN` 工作流
-
-### 5. staged 编辑并提交
-
-在数据表格中：
-
-1. 移动到目标 cell
-2. 按 `i`
-3. 输入新值
-4. 按 `Enter` 预览自动生成的 SQL
-5. 在 SQL tab 中按 `Ctrl-G` 提交 staged transaction
-
-## 常用快捷键
+| 键位 | 作用 |
+| --- | --- |
+| `j` / `k` | 在保存的连接之间移动 |
+| `Space` | 标记或取消标记连接，用于多连接启动 |
+| `a` | 新建连接 |
+| `e` | 编辑当前连接 |
+| `d` | 删除当前连接 |
+| `t` | 测试当前连接 |
+| `Enter` | 启动当前连接 |
+| `q` / `Esc` | 退出或取消 |
 
 ### 全局
 
-- `Tab` / `Shift-Tab`：在 pane 之间切焦点
-- `F2` 或 `Alt-1`：切到 `Data`
-- `F3` 或 `Alt-2`：切到 `SQL`
-- `F4` 或 `Alt-3`：切到 `Structure`
-- `Ctrl-P`：命令面板
-- `F10` / `Ctrl-R`：SQL history
+| 键位 | 作用 |
+| --- | --- |
+| `Tab` / `Shift-Tab` | 在 pane 之间轮转焦点 |
+| `F2` 或 `Alt-1` | 打开 `Data` |
+| `F3` 或 `Alt-2` | 打开 `SQL` |
+| `F4` 或 `Alt-3` | 打开 `Structure` |
+| `Ctrl-P` | 打开命令面板 |
+| `F10` 或 `Ctrl-R` | 打开 SQL history |
 
-### 浏览区
+### 资源树与浏览区
 
-- `j` / `k` 或方向键上下：移动选择
-- `Enter`、`Space`、`h`、`l`、左右方向键：展开 / 折叠
-- `e`：打开 SQL 编辑器
-- `s` / `i` / `u` / `d`：生成 CRUD 模板
-- `r`：刷新
-- `c`：取消任务
+| 键位 | 作用 |
+| --- | --- |
+| `j` / `k` | 移动选择 |
+| `h` / `l` | 折叠或展开 |
+| `Enter` / `Space` | 切换当前节点 |
+| `/` | 打开数据过滤 |
+| `e` | 打开 SQL 编辑器 |
+| `s` / `i` / `u` / `d` | 插入 `SELECT` / `INSERT` / `UPDATE` / `DELETE` 模板 |
+| `r` | 刷新当前选择 |
+| `c` | 取消运行中的任务 |
+| `q` / `Esc` | 退出工作区或返回焦点 |
 
 ### 数据表格
 
-- `j` / `k`：移动行
-- `h` / `l`：移动列
-- `PageUp` / `PageDown`：按页滚动
-- `n` / `p`：下一页 / 上一页预览
-- `y`：复制当前 row
-- `Y`：复制当前 cell
-- `w`：复制 `WHERE` 条件
-- `i`：编辑当前 cell
-- `f` / `F`：冻结列 / 清除冻结列
+| 键位 | 作用 |
+| --- | --- |
+| `j` / `k` | 移动行 |
+| `h` / `l` | 移动列 |
+| `Enter` | 打开 row inspector |
+| `/` | 过滤当前预览 |
+| `n` / `p` | 下一页 / 上一页预览 |
+| `y` / `Y` | 复制当前 row / cell |
+| `w` | 复制自动生成的 `WHERE` 条件 |
+| `i` | 发起 staged cell 编辑 |
+| `[` / `]` / `=` | 缩小、扩大或重置列宽 |
+| `f` / `F` | 冻结列或清除冻结列 |
 
 ### SQL 编辑器
 
-- `F5` 或 `Ctrl-Enter`：执行当前 statement
-- `F11`：`EXPLAIN`
-- `F12`：`EXPLAIN ANALYZE`
-- `Ctrl-T`：新建 SQL tab
-- `Ctrl-W`：关闭 SQL tab
-- `F6` / `F7`：切换 SQL tab
-- `F8` / `F9`：切换结果集
-- `Ctrl-G`：提交 staged CRUD
+| 键位 | 作用 |
+| --- | --- |
+| `Ctrl-Enter` 或 `F5` | 执行当前 statement |
+| `Ctrl-T` | 新建 SQL tab |
+| `Ctrl-W` | 关闭 SQL tab |
+| `F6` / `F7` | 上一个 / 下一个 SQL tab |
+| `F8` / `F9` | 上一个 / 下一个结果集 |
+| `F10` 或 `Ctrl-R` | 打开 SQL history |
+| `F11` / `F12` | `EXPLAIN` / `EXPLAIN ANALYZE` |
+| `Ctrl-G` | 提交 staged CRUD |
 
-## Driver Sidecar 说明
+### Row Inspector
 
-Relora 不会在 TUI 里运行 `cargo install`。对终端用户来说，不应该要求本机先安装 Rust toolchain。
-
-如果通过 npm 安装，sidecar 会跟随下载的 runtime bundle 一起落到本地，不需要单独安装。
-
-如果是包管理器集成或非交互 smoke test，建议使用：
-
-```bash
-relora paths --json
-```
-
-当前 driver 查找顺序：
-
-- `RELORA_POSTGRES_DRIVER` / `RELORA_MYSQL_DRIVER` / `RELORA_SQLITE_DRIVER`
-- `PATH` 中的同名 binary
-- Relora 主程序同目录下的同名 binary
-- `~/.cargo/bin`
-- workspace 的 `target/debug` 或 `target/release`
-
-## CLI 参数
-
-```bash
-cargo run -p relora -- --help
-```
-
-- `--url`：单个数据库连接串
-- `--connection`：命名连接，格式 `name=url`，可重复传入
-- `--preview-limit`：预览行数上限，默认 `100`
-
-## 给开发者的信息
-
-### Monorepo 结构
-
-```text
-.
-├── apps/
-│   └── relora/
-├── packages/
-│   └── relora-npm/
-├── scripts/
-│   └── package-release-bundle.cjs
-└── crates/
-    ├── relora-app/
-    ├── relora-core/
-    ├── relora-driver-mysql/
-    ├── relora-driver-postgres/
-    └── relora-driver-sqlite/
-```
-
-### 各包职责
-
-- `apps/relora`：可执行程序、CLI 配置、sidecar registry、TUI shell 与 `ratatui` 渲染
-- `packages/relora-npm`：npm 安装器包，负责下载预编译 Relora bundle
-- `scripts/package-release-bundle.cjs`：生成 npm / release 用版本化 bundle 的辅助脚本
-- `crates/relora-app`：应用状态、workspace 投影、SQL 编辑器状态、CRUD 工具、只读 UI 视图
-- `crates/relora-core`：共享数据库 trait 与领域模型
-- `crates/relora-driver-postgres`：PostgreSQL sidecar
-- `crates/relora-driver-mysql`：MySQL / MariaDB sidecar
-- `crates/relora-driver-sqlite`：SQLite sidecar
-
-### 验证命令
-
-```bash
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-```
-
-### 构建 npm release bundle
-
-在构建 release 二进制之后，可以用下面的脚本打出 npm 安装器所需的版本化 bundle：
-
-```bash
-cargo build --release -p relora -p relora-driver-postgres -p relora-driver-mysql -p relora-driver-sqlite
-node scripts/package-release-bundle.cjs --platform darwin --arch arm64
-```
-
-### 打包说明
-
-如果要做包管理器集成，可参考 [docs/packaging.md](docs/packaging.md)。仓库里也提供了源码构建 smoke test：
-
-```bash
-scripts/smoke-test-source-build.sh
-```
-
-维护者可以通过 `bumpp` 发版：
-
-```bash
-npm install
-npm run release
-```
+| 键位 | 作用 |
+| --- | --- |
+| `Tab` | 在 inspector pane 间切换 |
+| `j` / `k` | 移动或滚动 |
+| `PgUp` / `PgDn` | 按页滚动预览 |
+| `Ctrl-U` / `Ctrl-D` | 更快滚动 |
+| `y` / `Y` | 复制当前值 |
+| `i` | 从当前字段进入编辑 |
+| `f` | 切换原始值 / 格式化显示 |
+| `q` / `Esc` | 关闭 inspector |

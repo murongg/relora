@@ -8,7 +8,9 @@ use anyhow::{Context, Result, anyhow};
 use relora_core::db::DatabaseKind;
 
 use crate::{
-    config::{ConnectionConfig, save_saved_connections_to_path},
+    config::{
+        ConnectionConfig, save_saved_connections_to_path, saved_sql_store_path_for_connection_store,
+    },
     drivers,
 };
 
@@ -84,6 +86,7 @@ pub struct LauncherApp {
     pending_delete_index: Option<usize>,
     status: Option<String>,
     store_path: PathBuf,
+    saved_sql_store_path: PathBuf,
     preview_limit: usize,
 }
 
@@ -187,6 +190,7 @@ impl LauncherApp {
         store_path: PathBuf,
         preview_limit: usize,
     ) -> Self {
+        let saved_sql_store_path = saved_sql_store_path_for_connection_store(&store_path);
         Self {
             connections,
             marked_indexes: BTreeSet::new(),
@@ -197,8 +201,17 @@ impl LauncherApp {
             pending_delete_index: None,
             status: None,
             store_path,
+            saved_sql_store_path,
             preview_limit: preview_limit.max(1),
         }
+    }
+
+    pub fn saved_sql_store_path(&self) -> &Path {
+        &self.saved_sql_store_path
+    }
+
+    pub fn set_saved_sql_store_path(&mut self, path: PathBuf) {
+        self.saved_sql_store_path = path;
     }
 
     pub fn apply_action(&mut self, action: LauncherAction) -> Result<LauncherOutcome> {
@@ -330,11 +343,13 @@ impl LauncherApp {
     }
 
     pub fn clone_for_workspace_return(&self) -> Self {
-        Self::with_preview_limit(
+        let mut cloned = Self::with_preview_limit(
             self.connections.clone(),
             self.store_path.clone(),
             self.preview_limit,
-        )
+        );
+        cloned.saved_sql_store_path = self.saved_sql_store_path.clone();
+        cloned
     }
 
     pub fn marked_connection_count(&self) -> usize {

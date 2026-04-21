@@ -1,6 +1,7 @@
 pub(super) const KEY_INTERRUPT: char = 'c';
 pub(super) const KEY_COMMAND_PALETTE: char = 'p';
 pub(super) const KEY_SQL_HISTORY: char = 'r';
+pub(super) const KEY_SAVED_SQL: char = 'o';
 pub(super) const KEY_HELP: char = '?';
 pub(super) const KEY_HELP_FULLWIDTH: char = '？';
 pub(super) const KEY_CONFIRM_YES_LOWER: char = 'y';
@@ -60,6 +61,8 @@ pub(super) const KEY_EDITOR_NEW_TAB: char = 't';
 pub(super) const KEY_EDITOR_CLOSE_TAB: char = 'w';
 pub(super) const KEY_EDITOR_CANCEL_TASKS: char = 'k';
 pub(super) const KEY_EDITOR_COMMIT_STAGED: char = 'g';
+pub(super) const KEY_EDITOR_SAVE_SQL: char = 's';
+pub(super) const KEY_EDITOR_DELETE_SAVED_SQL: char = 'd';
 
 pub(super) const KEY_ALT_TAB_DATA: char = '1';
 pub(super) const KEY_ALT_TAB_SQL: char = '2';
@@ -90,7 +93,6 @@ pub(super) const FORM_SAVE_HELP: &str = "Driver/Mode: t tests, p/m/s or Left/Rig
 pub(super) const FORM_SAVE_HELP_SQLITE: &str = "SQLite: Ctrl-O browses files, :memory: stays in RAM. Driver/Mode still use Left/Right; Ctrl-T tests anywhere.";
 pub(super) const DRIVER_MISSING_HELP: &str = "Press Esc or Enter to close.";
 pub(super) const DELETE_CONNECTION_HELP: &str = "Press y to delete, n or Esc to cancel.";
-pub(super) const DELETE_OPERATION_HELP: &str = "Press y to execute, n or Esc to cancel.";
 pub(super) const SQLITE_FILE_PICKER_HELP: &str =
     "SQLite files: Enter open/select, Up/Down move, Left go up, Esc close";
 
@@ -100,8 +102,11 @@ pub(super) const FOOTER_KEYBOARD_HELP: &str =
     "Keyboard help: Esc/Enter/?/F1 close, then continue working in the same pane";
 pub(super) const FOOTER_SQL_HISTORY_HELP: &str =
     "SQL history: type search, Up/Down select, Enter rerun, Esc close";
+pub(super) const FOOTER_SAVED_SQL_HELP: &str =
+    "Saved SQL: type search, Up/Down select, Enter open, Esc close";
 pub(super) const FOOTER_DATA_FILTER_HELP: &str =
     "Data filter: type quick filter, Enter apply, Esc close";
+pub(super) const FOOTER_SAVE_SQL_HELP: &str = "Save SQL: type a name, Enter save, Esc close";
 pub(super) const FOOTER_CELL_EDIT_HELP: &str =
     "Cell edit: type new value, Enter preview staged SQL, Esc close";
 pub(super) const FOOTER_ROW_INSPECTOR_HELP: &str = "Cell details: Tab switch box, j/k move or scroll, PgUp/PgDn or Ctrl-U/Ctrl-D scroll, y copy, i edit, f raw/formatted";
@@ -110,11 +115,10 @@ pub(super) const FOOTER_COMPLETION_HELP: &str =
 pub(super) const FOOTER_SQL_RESULTS_HELP: &str =
     "SQL results: j/k rows, h/l columns, [/] resize, = auto, f freeze, F clear, Tab cycle";
 pub(super) const FOOTER_SQL_ASSETS_HELP: &str =
-    "SQL assets: j/k browse, Enter expand, Tab/Shift-Tab cycle, F2 Data, F4 Structure";
-pub(super) const FOOTER_SQL_EDITOR_HELP: &str =
-    "SQL editor: Tab/Shift-Tab cycle, Ctrl-Enter current stmt, F10 history, F11/F12 explain";
+    "SQL assets: j/k browse, Enter open/toggle, Tab/Shift-Tab cycle, F2 Data, F4 Structure";
+pub(super) const FOOTER_SQL_EDITOR_HELP: &str = "SQL editor: Tab/Shift-Tab cycle, Ctrl-Enter run, Ctrl-S save, Ctrl-D delete saved, Ctrl-O saved";
 pub(super) const FOOTER_SQL_TAB_HELP: &str =
-    "SQL tab: e open editor, F2 Data, F4 Structure, Ctrl-P command";
+    "SQL tab: e open editor, Ctrl-O saved, Ctrl-D delete saved, F10 history, F2 Data, F4 Structure";
 pub(super) const FOOTER_STRUCTURE_GRID_HELP: &str =
     "Structure tab: j/k fields, [/] resize, = auto, f freeze, F clear, Enter inspect";
 pub(super) const FOOTER_STRUCTURE_HELP: &str =
@@ -122,7 +126,7 @@ pub(super) const FOOTER_STRUCTURE_HELP: &str =
 pub(super) const FOOTER_DATA_GRID_HELP: &str =
     "Data tab: / filter, n/p page, y row, Y cell, w WHERE, i stage edit, [/] resize, f freeze";
 pub(super) const FOOTER_DATA_HELP: &str =
-    "Data tab: / filter, n/p page, F3 SQL, F4 Structure, j/k assets, Tab grid, e SQL, F10 history";
+    "Data tab: / filter, n/p page, F3 SQL, F4 Structure, j/k assets, Tab grid, e SQL, Ctrl-O/F10";
 
 pub(super) const HELP_GLOBAL_SHORTCUTS: [(&str, &str); 5] = [
     ("F1 / ?", "Open or close help"),
@@ -140,9 +144,12 @@ pub(super) const HELP_DATA_SHORTCUTS: [(&str, &str); 5] = [
     ("i", "Stage selected cell edit"),
 ];
 
-pub(super) const HELP_SQL_SHORTCUTS: [(&str, &str); 5] = [
+pub(super) const HELP_SQL_SHORTCUTS: [(&str, &str); 8] = [
     ("e", "Open SQL editor from browser"),
     ("Ctrl-Enter", "Run statement under cursor"),
+    ("Ctrl-S", "Save current SQL"),
+    ("Ctrl-D", "Delete the active saved SQL"),
+    ("Ctrl-O", "Open saved SQL"),
     ("F10 / Ctrl-R", "Open SQL history"),
     ("F11 / F12", "Explain / analyze when supported"),
     ("Tab", "Cycle editor, results, and assets"),

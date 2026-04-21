@@ -4,12 +4,14 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
+use relora_app::workspace::SavedSqlEntry;
 use serde_json::{Value, json};
 
 const APP_NAME: &str = "relora";
 const CONNECTIONS_ENV: &str = "RELORA_CONNECTIONS";
 const DATABASE_URL_ENV: &str = "RELORA_DATABASE_URL";
 const CONNECTION_STORE_ENV: &str = "RELORA_CONNECTION_STORE";
+const SAVED_SQL_STORE_ENV: &str = "RELORA_SAVED_SQL_STORE";
 
 #[derive(Debug, Clone, Parser)]
 #[command(
@@ -54,8 +56,10 @@ pub enum CliCommand {
 pub struct AppConfig {
     pub connections: Vec<ConnectionConfig>,
     pub saved_connections: Vec<ConnectionConfig>,
+    pub saved_sql: Vec<SavedSqlEntry>,
     pub launch_mode: LaunchMode,
     pub connection_store_path: PathBuf,
+    pub saved_sql_store_path: PathBuf,
     pub preview_limit: usize,
 }
 
@@ -77,6 +81,8 @@ pub enum ConfigError {
     InvalidConnection(String),
     InvalidConnectionStore(String),
     ConnectionStoreIo(String),
+    InvalidSavedSqlStore(String),
+    SavedSqlStoreIo(String),
 }
 
 impl fmt::Display for ConfigError {
@@ -92,6 +98,12 @@ impl fmt::Display for ConfigError {
             Self::ConnectionStoreIo(message) => {
                 write!(f, "failed to read or write the connection store: {message}")
             }
+            Self::InvalidSavedSqlStore(message) => {
+                write!(f, "invalid saved SQL store: {message}")
+            }
+            Self::SavedSqlStoreIo(message) => {
+                write!(f, "failed to read or write the saved SQL store: {message}")
+            }
         }
     }
 }
@@ -100,12 +112,24 @@ impl std::error::Error for ConfigError {}
 
 impl Cli {
     pub fn into_config(self) -> Result<AppConfig, ConfigError> {
-        self.into_config_with_store_path(default_connection_store_path())
+        let connection_store_path = default_connection_store_path();
+        let saved_sql_store_path = default_saved_sql_store_path();
+        self.into_config_with_paths(connection_store_path, saved_sql_store_path)
     }
 
     pub fn into_config_with_store_path(
         self,
         connection_store_path: PathBuf,
+    ) -> Result<AppConfig, ConfigError> {
+        let saved_sql_store_path =
+            saved_sql_store_path_for_connection_store(&connection_store_path);
+        self.into_config_with_paths(connection_store_path, saved_sql_store_path)
+    }
+
+    pub fn into_config_with_paths(
+        self,
+        connection_store_path: PathBuf,
+        saved_sql_store_path: PathBuf,
     ) -> Result<AppConfig, ConfigError> {
         let mut connections = parse_named_connections(self.connections)?;
 
@@ -130,6 +154,7 @@ impl Cli {
         }
 
         let saved_connections = load_saved_connections_from_path(&connection_store_path)?;
+        let saved_sql = load_saved_sql_from_path(&saved_sql_store_path)?;
         let launch_mode = if connections.is_empty() {
             LaunchMode::Launcher
         } else {
@@ -139,8 +164,10 @@ impl Cli {
         Ok(AppConfig {
             connections,
             saved_connections,
+            saved_sql,
             launch_mode,
             connection_store_path,
+            saved_sql_store_path,
             preview_limit: self.preview_limit.max(1),
         })
     }
@@ -194,6 +221,41 @@ pub fn default_connection_store_path() -> PathBuf {
     PathBuf::from(".relora-connections.json")
 }
 
+pub fn default_saved_sql_store_path() -> PathBuf {
+    if let Some(path) = std::env::var_os(SAVED_SQL_STORE_ENV) {
+        return PathBuf::from(path);
+    }
+
+    if let Some(path) = std::env::var_os("XDG_CONFIG_HOME") {
+        return PathBuf::from(path).join(APP_NAME).join("saved-sql.json");
+    }
+
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home)
+            .join(".config")
+            .join(APP_NAME)
+            .join("saved-sql.json");
+    }
+
+    PathBuf::from(".relora-saved-sql.json")
+}
+
+pub fn saved_sql_store_path_for_connection_store(connection_store_path: &Path) -> PathBuf {
+    if connection_store_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        == Some("connections.json")
+    {
+        return connection_store_path.with_file_name("saved-sql.json");
+    }
+
+    let stem = connection_store_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("relora-connections");
+    connection_store_path.with_file_name(format!("{stem}-saved-sql.json"))
+}
+
 pub fn load_saved_connections_from_path(path: &Path) -> Result<Vec<ConnectionConfig>, ConfigError> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -245,6 +307,70 @@ pub fn load_saved_connections_from_path(path: &Path) -> Result<Vec<ConnectionCon
         .collect()
 }
 
+pub fn load_saved_sql_from_path(path: &Path) -> Result<Vec<SavedSqlEntry>, ConfigError> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(path)
+        .map_err(|error| ConfigError::SavedSqlStoreIo(error.to_string()))?;
+    let json: Value = serde_json::from_str(&content)
+        .map_err(|error| ConfigError::InvalidSavedSqlStore(error.to_string()))?;
+    let Some(items) = json.get("saved_sql").and_then(Value::as_array) else {
+        return Err(ConfigError::InvalidSavedSqlStore(
+            "expected a top-level `saved_sql` array".to_string(),
+        ));
+    };
+
+    items
+        .iter()
+        .map(|item| {
+            let name = item
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    ConfigError::InvalidSavedSqlStore(
+                        "each saved SQL entry must include a non-empty `name`".to_string(),
+                    )
+                })?;
+            let sql = item
+                .get("sql")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    ConfigError::InvalidSavedSqlStore(
+                        "each saved SQL entry must include a non-empty `sql`".to_string(),
+                    )
+                })?;
+
+            Ok(SavedSqlEntry {
+                name: name.to_string(),
+                sql: sql.to_string(),
+                connection_name: item
+                    .get("connection_name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
+                database_name: item
+                    .get("database_name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
+                schema_name: item
+                    .get("schema_name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
+            })
+        })
+        .collect()
+}
+
 pub fn save_saved_connections_to_path(
     path: &Path,
     connections: &[ConnectionConfig],
@@ -269,6 +395,31 @@ pub fn save_saved_connections_to_path(
     .map_err(|error| ConfigError::InvalidConnectionStore(error.to_string()))?;
 
     fs::write(path, content).map_err(|error| ConfigError::ConnectionStoreIo(error.to_string()))
+}
+
+pub fn save_saved_sql_to_path(path: &Path, entries: &[SavedSqlEntry]) -> Result<(), ConfigError> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|error| ConfigError::SavedSqlStoreIo(error.to_string()))?;
+        }
+    }
+
+    let content = serde_json::to_string_pretty(&json!({
+        "saved_sql": entries
+            .iter()
+            .map(|entry| json!({
+                "name": entry.name,
+                "sql": entry.sql,
+                "connection_name": entry.connection_name,
+                "database_name": entry.database_name,
+                "schema_name": entry.schema_name,
+            }))
+            .collect::<Vec<_>>()
+    }))
+    .map_err(|error| ConfigError::InvalidSavedSqlStore(error.to_string()))?;
+
+    fs::write(path, content).map_err(|error| ConfigError::SavedSqlStoreIo(error.to_string()))
 }
 
 fn split_connection_specs(value: String) -> impl Iterator<Item = String> {

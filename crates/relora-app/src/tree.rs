@@ -51,9 +51,20 @@ pub(crate) enum TreeNodeKey {
         schema: String,
         kind: DbObjectKind,
     },
+    SavedQueryGroup {
+        connection: usize,
+        database: String,
+        schema: String,
+    },
     Object {
         connection: usize,
         object: DbObjectRef,
+    },
+    SavedQuery {
+        connection: usize,
+        database: String,
+        schema: String,
+        name: String,
     },
 }
 

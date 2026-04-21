@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::Result;
 use relora_app::view::RightPaneTab;
-use relora_app::workspace::{ConnectionBootstrap, WorkspaceAction, WorkspaceApp};
+use relora_app::workspace::{ConnectionBootstrap, SavedSqlEntry, WorkspaceAction, WorkspaceApp};
 use relora_core::db::{
     Catalog, CatalogSummary, DatabaseDriver, DatabaseEntry, DatabaseKind, DatabaseSummary,
     DbColumn, DbObjectKind, DbObjectRef, ObjectKindCount, QueryResult, SchemaEntry, SchemaSummary,
@@ -1649,6 +1649,214 @@ fn workspace_searches_and_reruns_sql_history() -> Result<()> {
         .lock()
         .expect("sql recorder lock should be available");
     assert_eq!(recorded.last().map(String::as_str), Some("select 2;"));
+    Ok(())
+}
+
+#[test]
+fn workspace_saves_and_reopens_saved_sql_without_executing_it() -> Result<()> {
+    let executed_sql = Arc::new(Mutex::new(Vec::new()));
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(
+            MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+                vec![],
+                vec![],
+            )
+            .with_sql_recorder(executed_sql.clone()),
+        ),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::OpenSqlEditor)?;
+    workspace.set_editor_sql("select * from users where id = 42;")?;
+    workspace.apply_action(WorkspaceAction::OpenSaveSqlDialog)?;
+    assert_eq!(
+        workspace
+            .view()
+            .save_sql_dialog
+            .expect("save SQL dialog should be open")
+            .name,
+        ""
+    );
+    for ch in "User Lookup".chars() {
+        workspace.insert_save_sql_name_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::ConfirmSaveSql)?;
+
+    assert_eq!(
+        workspace.saved_queries_snapshot(),
+        vec![SavedSqlEntry {
+            name: "User Lookup".to_string(),
+            sql: "select * from users where id = 42;".to_string(),
+            connection_name: Some("pg".to_string()),
+            database_name: Some("postgres".to_string()),
+            schema_name: Some("public".to_string()),
+        }]
+    );
+
+    workspace.apply_action(WorkspaceAction::OpenSavedSql)?;
+    workspace.insert_saved_sql_search_char('u')?;
+    let saved = workspace
+        .view()
+        .saved_sql
+        .expect("saved SQL overlay should be open");
+    assert_eq!(saved.items[0].name, "User Lookup");
+
+    workspace.apply_action(WorkspaceAction::OpenSavedSqlSelection)?;
+
+    assert_eq!(workspace.editor_tab_count(), 2);
+    let snapshot = workspace
+        .editor_snapshot()
+        .expect("saved SQL should open in a fresh editor tab");
+    assert_eq!(snapshot.title, "User Lookup");
+    assert_eq!(snapshot.sql, "select * from users where id = 42;");
+    assert!(
+        executed_sql
+            .lock()
+            .expect("sql recorder lock should be available")
+            .is_empty(),
+        "opening a saved SQL entry should not execute it"
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_exposes_saved_sql_in_tree_queries_group() -> Result<()> {
+    let executed_sql = Arc::new(Mutex::new(Vec::new()));
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(
+            MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+                vec![],
+                vec![],
+            )
+            .with_sql_recorder(executed_sql.clone()),
+        ),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.replace_saved_queries(vec![SavedSqlEntry {
+        name: "User Lookup".to_string(),
+        sql: "select * from users where id = 7;".to_string(),
+        connection_name: Some("pg".to_string()),
+        database_name: Some("postgres".to_string()),
+        schema_name: Some("public".to_string()),
+    }]);
+
+    let queries_index = tree_row_index(&workspace, "Queries");
+    assert!(
+        !workspace
+            .tree_rows()
+            .iter()
+            .any(|row| row.label == "User Lookup"),
+        "query items should stay nested until the Queries group is expanded"
+    );
+
+    workspace.select_tree_row_index(queries_index)?;
+    workspace.open_selected_tree_item_default()?;
+
+    let query_index = tree_row_index(&workspace, "User Lookup");
+    workspace.select_tree_row_index(query_index)?;
+    workspace.open_selected_tree_item_default()?;
+
+    let snapshot = workspace
+        .editor_snapshot()
+        .expect("saved SQL from the tree should open in the editor");
+    assert_eq!(snapshot.title, "User Lookup");
+    assert_eq!(snapshot.sql, "select * from users where id = 7;");
+    assert!(
+        executed_sql
+            .lock()
+            .expect("sql recorder lock should be available")
+            .is_empty(),
+        "opening a saved SQL tree item should not execute it"
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_updates_and_deletes_saved_sql_from_the_editor() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![],
+            vec![],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.replace_saved_queries(vec![SavedSqlEntry {
+        name: "User Lookup".to_string(),
+        sql: "select * from users where id = 7;".to_string(),
+        connection_name: Some("pg".to_string()),
+        database_name: Some("postgres".to_string()),
+        schema_name: Some("public".to_string()),
+    }]);
+
+    workspace.apply_action(WorkspaceAction::OpenSavedSql)?;
+    workspace.apply_action(WorkspaceAction::OpenSavedSqlSelection)?;
+    workspace.set_editor_sql("select * from users where id = 99;")?;
+
+    workspace.apply_action(WorkspaceAction::OpenSaveSqlDialog)?;
+    assert_eq!(
+        workspace
+            .view()
+            .save_sql_dialog
+            .expect("save SQL dialog should be open for an existing saved query")
+            .name,
+        "User Lookup"
+    );
+    workspace.clear_save_sql_name()?;
+    for ch in "User Lookup v2".chars() {
+        workspace.insert_save_sql_name_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::ConfirmSaveSql)?;
+
+    assert_eq!(
+        workspace.saved_queries_snapshot(),
+        vec![SavedSqlEntry {
+            name: "User Lookup v2".to_string(),
+            sql: "select * from users where id = 99;".to_string(),
+            connection_name: Some("pg".to_string()),
+            database_name: Some("postgres".to_string()),
+            schema_name: Some("public".to_string()),
+        }]
+    );
+    assert_eq!(workspace.active_editor_tab_title(), Some("User Lookup v2"));
+
+    workspace.apply_action(WorkspaceAction::DeleteSavedSqlFromEditor)?;
+    let confirmation = workspace
+        .view()
+        .delete_confirmation
+        .expect("deleting a saved query should ask for confirmation");
+    assert!(confirmation.title.contains("Saved SQL"));
+    assert!(confirmation.message.contains("User Lookup v2"));
+
+    workspace.apply_action(WorkspaceAction::ConfirmDeleteOperation)?;
+    assert!(workspace.saved_queries_snapshot().is_empty());
+    assert_eq!(workspace.active_editor_tab_title(), Some("User Lookup v2"));
+    assert!(
+        workspace
+            .editor_status()
+            .expect("deleting the saved query should set an editor status")
+            .contains("Deleted saved SQL")
+    );
+
+    workspace.apply_action(WorkspaceAction::OpenSaveSqlDialog)?;
+    assert_eq!(
+        workspace
+            .view()
+            .save_sql_dialog
+            .expect("deleted saved query should reopen the save dialog")
+            .name,
+        ""
+    );
     Ok(())
 }
 

@@ -1,4 +1,4 @@
-use crate::completion::CompletionItem;
+use crate::{completion::CompletionItem, workspace::SavedSqlEntry};
 use relora_core::db::{
     DatabaseKind, DbColumn, DbObjectKind, DbObjectRef, DriverCapabilities, TablePreview,
 };
@@ -44,6 +44,18 @@ pub struct SqlHistoryView<'a> {
     pub query: &'a str,
     pub items: &'a [String],
     pub selected_index: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SavedSqlView<'a> {
+    pub query: &'a str,
+    pub items: &'a [SavedSqlEntry],
+    pub selected_index: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SaveSqlDialogView<'a> {
+    pub name: &'a str,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -109,6 +121,8 @@ pub struct DeleteConfirmationView<'a> {
     pub title: &'a str,
     pub message: &'a str,
     pub sql_preview: &'a str,
+    pub warning: &'a str,
+    pub help: &'a str,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -141,6 +155,8 @@ pub struct WorkspaceView<'a> {
     pub data_grid_focused: bool,
     pub command_palette: Option<CommandPaletteView<'a>>,
     pub sql_history: Option<SqlHistoryView<'a>>,
+    pub saved_sql: Option<SavedSqlView<'a>>,
+    pub save_sql_dialog: Option<SaveSqlDialogView<'a>>,
     pub data_filter: Option<DataFilterView<'a>>,
     pub cell_edit: Option<CellEditView<'a>>,
     pub row_inspector: Option<RowInspectorView<'a>>,

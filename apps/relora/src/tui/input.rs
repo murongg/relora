@@ -23,6 +23,8 @@ fn workspace_can_return_to_launcher(workspace: &WorkspaceApp) -> bool {
     !workspace.delete_confirmation_open()
         && !workspace.help_overlay_open()
         && !workspace.command_palette_open()
+        && !workspace.saved_sql_open()
+        && !workspace.save_sql_dialog_open()
         && !workspace.sql_history_open()
         && !workspace.data_filter_open()
         && !workspace.cell_edit_open()
@@ -49,6 +51,14 @@ pub(super) fn handle_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
         return handle_command_palette_key(app, key);
     }
 
+    if app.saved_sql_open() {
+        return handle_saved_sql_key(app, key);
+    }
+
+    if app.save_sql_dialog_open() {
+        return handle_save_sql_dialog_key(app, key);
+    }
+
     if app.sql_history_open() {
         return handle_sql_history_key(app, key);
     }
@@ -72,6 +82,10 @@ pub(super) fn handle_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
             && key.code == KeyCode::Char(KEY_SQL_HISTORY))
     {
         return app.apply_action(WorkspaceAction::OpenSqlHistory);
+    }
+
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char(KEY_SAVED_SQL) {
+        return app.apply_action(WorkspaceAction::OpenSavedSql);
     }
 
     if key.code == KeyCode::F(FKEY_HELP) {
@@ -212,7 +226,12 @@ pub(super) fn handle_launcher_key(app: &mut AppShell, key: KeyEvent) -> Result<b
         crate::launcher::LauncherOutcome::Stay => Ok(false),
         crate::launcher::LauncherOutcome::Quit => Ok(true),
         crate::launcher::LauncherOutcome::Launch(connections) => {
-            match bootstrap_workspace(&connections, preview_limit) {
+            let saved_sql = if let AppShell::Launcher(launcher) = app {
+                load_saved_sql_from_path(launcher.saved_sql_store_path()).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            match bootstrap_workspace(&connections, preview_limit, &saved_sql) {
                 Ok(workspace) => {
                     let AppShell::Launcher(launcher) = app else {
                         unreachable!("launcher outcome should only be handled from the launcher");
@@ -457,6 +476,36 @@ pub(super) fn handle_sql_history_key(app: &mut WorkspaceApp, key: KeyEvent) -> R
     }
 }
 
+pub(super) fn handle_saved_sql_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char(KEY_SAVED_SQL) {
+        return app.apply_action(WorkspaceAction::CloseSavedSql);
+    }
+
+    match key.code {
+        KeyCode::Esc => app.apply_action(WorkspaceAction::CloseSavedSql),
+        KeyCode::Enter => app.apply_action(WorkspaceAction::OpenSavedSqlSelection),
+        KeyCode::Down => app.apply_action(WorkspaceAction::NextSavedSqlItem),
+        KeyCode::Up => app.apply_action(WorkspaceAction::PreviousSavedSqlItem),
+        KeyCode::Backspace => app.backspace_saved_sql_search(),
+        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.insert_saved_sql_search_char(ch)
+        }
+        _ => Ok(()),
+    }
+}
+
+pub(super) fn handle_save_sql_dialog_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => app.apply_action(WorkspaceAction::CloseSaveSqlDialog),
+        KeyCode::Enter => app.apply_action(WorkspaceAction::ConfirmSaveSql),
+        KeyCode::Backspace => app.backspace_save_sql_name(),
+        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.insert_save_sql_name_char(ch)
+        }
+        _ => Ok(()),
+    }
+}
+
 pub(super) fn handle_data_filter_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::Esc => app.apply_action(WorkspaceAction::CloseDataFilter),
@@ -651,6 +700,11 @@ pub(super) fn map_editor_control_key_to_action(key: KeyEvent) -> Option<Workspac
 
     match key.code {
         KeyCode::Enter => Some(WorkspaceAction::ExecuteEditor),
+        KeyCode::Char(KEY_SAVED_SQL) => Some(WorkspaceAction::OpenSavedSql),
+        KeyCode::Char(KEY_EDITOR_SAVE_SQL) => Some(WorkspaceAction::OpenSaveSqlDialog),
+        KeyCode::Char(KEY_EDITOR_DELETE_SAVED_SQL) => {
+            Some(WorkspaceAction::DeleteSavedSqlFromEditor)
+        }
         KeyCode::Char(KEY_EDITOR_NEW_TAB) => Some(WorkspaceAction::NewEditorTab),
         KeyCode::Char(KEY_EDITOR_CLOSE_TAB) => Some(WorkspaceAction::CloseEditorTab),
         KeyCode::Char(KEY_EDITOR_CANCEL_TASKS) => Some(WorkspaceAction::CancelTasks),
@@ -712,8 +766,8 @@ pub(super) fn map_browser_key_to_action(key: KeyEvent) -> Option<WorkspaceAction
         KeyCode::Char(KEY_BROWSER_TEMPLATE_DELETE) => Some(WorkspaceAction::OpenDeleteTemplate),
         KeyCode::Down | KeyCode::Char(KEY_BROWSER_DOWN) => Some(WorkspaceAction::NextItem),
         KeyCode::Up | KeyCode::Char(KEY_BROWSER_UP) => Some(WorkspaceAction::PreviousItem),
-        KeyCode::Enter
-        | KeyCode::Right
+        KeyCode::Enter => Some(WorkspaceAction::OpenSelectedTreeItemDefault),
+        KeyCode::Right
         | KeyCode::Left
         | KeyCode::Char(KEY_BROWSER_EXPAND_RIGHT)
         | KeyCode::Char(KEY_BROWSER_EXPAND_LEFT)
@@ -788,7 +842,13 @@ pub(super) fn handle_mouse(app: &mut WorkspaceApp, mouse: MouseEvent, area: Rect
                 app.apply_action(WorkspaceAction::FocusAssets)?;
                 let is_double_click = app.register_tree_row_click(row_index)?;
                 if is_double_click {
-                    app.open_selected_tree_item_default()?;
+                    if app.active_right_tab() == RightPaneTab::Sql
+                        && app.selected_object().is_some()
+                    {
+                        app.apply_action(WorkspaceAction::OpenSqlEditor)?;
+                    } else {
+                        app.apply_action(WorkspaceAction::OpenSelectedTreeItemDefault)?;
+                    }
                 }
             } else if let Some(tab_index) = editor_tab_index_at(mouse, area, app) {
                 app.select_editor_tab_index(tab_index)?;

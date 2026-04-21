@@ -40,7 +40,9 @@ use relora_core::db::TablePreview;
 use serde_json::Value as JsonValue;
 
 use crate::{
-    config::{AppConfig, ConnectionConfig, LaunchMode},
+    config::{
+        AppConfig, ConnectionConfig, LaunchMode, load_saved_sql_from_path, save_saved_sql_to_path,
+    },
     drivers,
     launcher::{LauncherAction, LauncherApp, LauncherFormField},
     workspace::{ConnectionBootstrap, WorkspaceAction, WorkspaceApp},
@@ -127,13 +129,16 @@ enum AppShell {
 struct WorkspaceShell {
     workspace: WorkspaceApp,
     launcher: Option<Box<LauncherApp>>,
+    saved_sql_store_path: std::path::PathBuf,
 }
 
 impl WorkspaceShell {
     fn with_launcher(workspace: WorkspaceApp, launcher: LauncherApp) -> Self {
+        let saved_sql_store_path = launcher.saved_sql_store_path().to_path_buf();
         Self {
             workspace,
             launcher: Some(Box::new(launcher)),
+            saved_sql_store_path,
         }
     }
 
@@ -151,6 +156,7 @@ impl From<WorkspaceApp> for Box<WorkspaceShell> {
         Box::new(WorkspaceShell {
             workspace,
             launcher: None,
+            saved_sql_store_path: crate::config::default_saved_sql_store_path(),
         })
     }
 }
@@ -187,21 +193,26 @@ impl ClipboardSink for SystemClipboard {
 pub fn run(config: AppConfig) -> Result<()> {
     let mut app = match config.launch_mode {
         LaunchMode::Workspace => {
-            let launcher = LauncherApp::with_preview_limit(
+            let mut launcher = LauncherApp::with_preview_limit(
                 launcher_connections_for_workspace(&config),
                 config.connection_store_path.clone(),
                 config.preview_limit,
             );
+            launcher.set_saved_sql_store_path(config.saved_sql_store_path.clone());
             AppShell::Workspace(Box::new(WorkspaceShell::with_launcher(
-                bootstrap_workspace(&config.connections, config.preview_limit)?,
+                bootstrap_workspace(&config.connections, config.preview_limit, &config.saved_sql)?,
                 launcher,
             )))
         }
-        LaunchMode::Launcher => AppShell::Launcher(Box::new(LauncherApp::with_preview_limit(
-            config.saved_connections,
-            config.connection_store_path,
-            config.preview_limit,
-        ))),
+        LaunchMode::Launcher => {
+            let mut launcher = LauncherApp::with_preview_limit(
+                config.saved_connections,
+                config.connection_store_path,
+                config.preview_limit,
+            );
+            launcher.set_saved_sql_store_path(config.saved_sql_store_path);
+            AppShell::Launcher(Box::new(launcher))
+        }
     };
 
     enable_raw_mode()?;
@@ -265,6 +276,7 @@ fn run_loop(
     mut clipboard: Option<&mut dyn ClipboardSink>,
 ) -> Result<()> {
     let mut last_synced_copy_sequence = 0;
+    let mut last_synced_saved_sql_sequence = 0;
     loop {
         if let AppShell::Workspace(workspace) = app {
             workspace.drain_background()?;
@@ -297,6 +309,7 @@ fn run_loop(
                 let _ =
                     sync_clipboard_if_needed(workspace, clipboard, &mut last_synced_copy_sequence);
             }
+            let _ = sync_saved_sql_if_needed(workspace, &mut last_synced_saved_sql_sequence);
         }
     }
 
@@ -310,6 +323,7 @@ fn should_handle_key_event(key: KeyEvent) -> bool {
 fn bootstrap_workspace(
     connections: &[ConnectionConfig],
     preview_limit: usize,
+    saved_sql: &[relora_app::workspace::SavedSqlEntry],
 ) -> Result<WorkspaceApp> {
     let bootstraps = connections
         .iter()
@@ -324,6 +338,7 @@ fn bootstrap_workspace(
     for (index, connection) in connections.iter().enumerate() {
         workspace.set_connection_read_only(index, connection.read_only)?;
     }
+    workspace.replace_saved_queries(saved_sql.to_vec());
     Ok(workspace)
 }
 
@@ -352,5 +367,22 @@ fn sync_clipboard_if_needed(
         return Ok(false);
     };
     clipboard.set_text(text)?;
+    Ok(true)
+}
+
+fn sync_saved_sql_if_needed(
+    workspace: &WorkspaceShell,
+    last_synced_saved_sql_sequence: &mut u64,
+) -> Result<bool> {
+    let sequence = workspace.saved_queries_sync_sequence();
+    if sequence == 0 || sequence == *last_synced_saved_sql_sequence {
+        return Ok(false);
+    }
+
+    save_saved_sql_to_path(
+        &workspace.saved_sql_store_path,
+        &workspace.saved_queries_snapshot(),
+    )?;
+    *last_synced_saved_sql_sequence = sequence;
     Ok(true)
 }

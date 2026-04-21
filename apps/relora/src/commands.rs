@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::{
-    config::{CliCommand, default_connection_store_path},
+    config::{CliCommand, default_connection_store_path, default_saved_sql_store_path},
     drivers::driver_path_statuses,
 };
 
@@ -13,6 +13,7 @@ pub struct PathsReport {
     pub app_name: &'static str,
     pub version: &'static str,
     pub connection_store_path: PathBuf,
+    pub saved_sql_store_path: PathBuf,
     pub drivers: Vec<DriverPathReport>,
 }
 
@@ -32,10 +33,23 @@ pub fn run(command: CliCommand) -> Result<()> {
 }
 
 pub fn build_paths_report() -> PathsReport {
-    build_paths_report_with_store_path(default_connection_store_path())
+    build_paths_report_with_store_paths(
+        default_connection_store_path(),
+        default_saved_sql_store_path(),
+    )
 }
 
 pub fn build_paths_report_with_store_path(connection_store_path: PathBuf) -> PathsReport {
+    build_paths_report_with_store_paths(
+        connection_store_path.clone(),
+        crate::config::saved_sql_store_path_for_connection_store(&connection_store_path),
+    )
+}
+
+pub fn build_paths_report_with_store_paths(
+    connection_store_path: PathBuf,
+    saved_sql_store_path: PathBuf,
+) -> PathsReport {
     let drivers = driver_path_statuses()
         .into_iter()
         .map(|status| DriverPathReport {
@@ -51,6 +65,7 @@ pub fn build_paths_report_with_store_path(connection_store_path: PathBuf) -> Pat
         app_name: env!("CARGO_PKG_NAME"),
         version: env!("CARGO_PKG_VERSION"),
         connection_store_path,
+        saved_sql_store_path,
         drivers,
     }
 }
@@ -71,6 +86,7 @@ fn print_human_paths_report(report: &PathsReport) {
         "Connection store: {}",
         report.connection_store_path.display()
     );
+    println!("Saved SQL store: {}", report.saved_sql_store_path.display());
     println!("Driver binaries:");
     for driver in &report.drivers {
         let resolved = driver

@@ -25,8 +25,8 @@ use crate::{
     view::{
         CellEditView, CommandPaletteItemView, CommandPaletteView, DataFilterView,
         DeleteConfirmationView, EditorCompletionView, EditorView, RightPaneTab, RightPaneTabView,
-        RowInspectorPane, RowInspectorView, SqlHistoryView, StagedCrudView, StructureView,
-        WorkspaceView,
+        RowInspectorPane, RowInspectorView, SaveSqlDialogView, SavedSqlView, SqlHistoryView,
+        StagedCrudView, StructureView, WorkspaceView,
     },
 };
 
@@ -50,6 +50,7 @@ pub enum WorkspaceAction {
     NextItem,
     PreviousItem,
     ToggleNode,
+    OpenSelectedTreeItemDefault,
     ToggleBrowserFocus,
     ReverseBrowserFocus,
     FocusAssets,
@@ -80,6 +81,15 @@ pub enum WorkspaceAction {
     NextSqlHistoryItem,
     PreviousSqlHistoryItem,
     RunSqlHistorySelection,
+    OpenSavedSql,
+    CloseSavedSql,
+    NextSavedSqlItem,
+    PreviousSavedSqlItem,
+    OpenSavedSqlSelection,
+    OpenSaveSqlDialog,
+    CloseSaveSqlDialog,
+    ConfirmSaveSql,
+    DeleteSavedSqlFromEditor,
     OpenDataFilter,
     CloseDataFilter,
     ApplyDataFilter,
@@ -174,6 +184,20 @@ const PALETTE_COMMANDS: &[PaletteCommand] = &[
             hint: "Search and rerun previously executed SQL",
         },
         action: WorkspaceAction::OpenSqlHistory,
+    },
+    PaletteCommand {
+        item: CommandPaletteItemView {
+            title: "Open Saved SQL",
+            hint: "Search saved SQL snippets and open them in the editor",
+        },
+        action: WorkspaceAction::OpenSavedSql,
+    },
+    PaletteCommand {
+        item: CommandPaletteItemView {
+            title: "Save Current SQL",
+            hint: "Save the active SQL editor buffer for later reuse",
+        },
+        action: WorkspaceAction::OpenSaveSqlDialog,
     },
     PaletteCommand {
         item: CommandPaletteItemView {
@@ -281,6 +305,15 @@ pub struct SqlEditorSnapshot {
     pub sql: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedSqlEntry {
+    pub name: String,
+    pub sql: String,
+    pub connection_name: Option<String>,
+    pub database_name: Option<String>,
+    pub schema_name: Option<String>,
+}
+
 pub struct WorkspaceApp {
     sessions: Vec<ConnectionSession>,
     entries: Vec<TreeEntry>,
@@ -300,6 +333,8 @@ pub struct WorkspaceApp {
     help_overlay_visible: bool,
     editor_completion: EditorCompletionState,
     sql_history: SqlHistoryState,
+    saved_sql: SavedSqlState,
+    save_sql_dialog: Option<SaveSqlDialogState>,
     data_filter: Option<DataFilterState>,
     active_data_filter: Option<String>,
     preview_page_offset: usize,
@@ -330,6 +365,7 @@ struct ConnectionSession {
     expanded_databases: BTreeSet<String>,
     expanded_schemas: BTreeSet<(String, String)>,
     expanded_groups: BTreeSet<(String, String, DbObjectKind)>,
+    expanded_saved_query_groups: BTreeSet<(String, String)>,
     loaded_groups: BTreeSet<(String, String, DbObjectKind)>,
     pending: PendingSessionWork,
 }
@@ -394,6 +430,10 @@ struct DataFilterState {
     input: String,
 }
 
+struct SaveSqlDialogState {
+    name: String,
+}
+
 struct CellEditState {
     connection_index: usize,
     object: DbObjectRef,
@@ -412,6 +452,8 @@ struct DeleteConfirmationState {
     title: String,
     message: String,
     sql_preview: String,
+    warning: String,
+    help: String,
     operation: PendingDeleteOperation,
 }
 
@@ -420,6 +462,10 @@ enum PendingDeleteOperation {
         connection_index: usize,
         sql: String,
         status: Option<String>,
+    },
+    DeleteSavedSql {
+        name: String,
+        tab_id: usize,
     },
 }
 
@@ -508,6 +554,7 @@ struct SqlEditorTab {
     connection_index: usize,
     database_name: Option<String>,
     title: String,
+    saved_query_name: Option<String>,
     buffer: SqlEditorBuffer,
     status: Option<String>,
     result_sets: Vec<EditorResultSet>,
@@ -519,6 +566,16 @@ struct SqlEditorTab {
 struct EditorResultSet {
     title: String,
     grid: TablePreview,
+}
+
+#[derive(Default)]
+struct SavedSqlState {
+    entries: Vec<SavedSqlEntry>,
+    visible_items: Vec<SavedSqlEntry>,
+    query: String,
+    selected: usize,
+    open: bool,
+    sync_sequence: u64,
 }
 
 impl WorkspaceApp {
@@ -570,6 +627,7 @@ impl WorkspaceApp {
                 expanded_databases: BTreeSet::new(),
                 expanded_schemas: BTreeSet::new(),
                 expanded_groups: BTreeSet::new(),
+                expanded_saved_query_groups: BTreeSet::new(),
                 loaded_groups,
                 pending: PendingSessionWork::default(),
             };
@@ -613,6 +671,8 @@ impl WorkspaceApp {
             help_overlay_visible: false,
             editor_completion: EditorCompletionState::default(),
             sql_history: SqlHistoryState::default(),
+            saved_sql: SavedSqlState::default(),
+            save_sql_dialog: None,
             data_filter: None,
             active_data_filter: None,
             preview_page_offset: 0,
@@ -669,6 +729,13 @@ impl WorkspaceApp {
                 | WorkspaceAction::CloseSqlHistory
                 | WorkspaceAction::NextSqlHistoryItem
                 | WorkspaceAction::PreviousSqlHistoryItem
+                | WorkspaceAction::OpenSavedSql
+                | WorkspaceAction::CloseSavedSql
+                | WorkspaceAction::NextSavedSqlItem
+                | WorkspaceAction::PreviousSavedSqlItem
+                | WorkspaceAction::OpenSaveSqlDialog
+                | WorkspaceAction::CloseSaveSqlDialog
+                | WorkspaceAction::DeleteSavedSqlFromEditor
                 | WorkspaceAction::OpenDataFilter
                 | WorkspaceAction::CloseDataFilter
                 | WorkspaceAction::StartCellEdit
@@ -702,6 +769,10 @@ impl WorkspaceApp {
             WorkspaceAction::NextItem => self.move_selection(1)?,
             WorkspaceAction::PreviousItem => self.move_selection(-1)?,
             WorkspaceAction::ToggleNode => self.toggle_selected()?,
+            WorkspaceAction::OpenSelectedTreeItemDefault => {
+                let result = self.open_selected_tree_item_default();
+                self.handle_error(result);
+            }
             WorkspaceAction::ToggleBrowserFocus => self.toggle_browser_focus(),
             WorkspaceAction::ReverseBrowserFocus => self.reverse_browser_focus(),
             WorkspaceAction::FocusAssets => self.focus_assets(),
@@ -757,6 +828,27 @@ impl WorkspaceApp {
             WorkspaceAction::PreviousSqlHistoryItem => self.move_sql_history_selection(-1),
             WorkspaceAction::RunSqlHistorySelection => {
                 let result = self.run_sql_history_selection();
+                self.handle_error(result);
+            }
+            WorkspaceAction::OpenSavedSql => self.open_saved_sql(),
+            WorkspaceAction::CloseSavedSql => self.close_saved_sql(),
+            WorkspaceAction::NextSavedSqlItem => self.move_saved_sql_selection(1),
+            WorkspaceAction::PreviousSavedSqlItem => self.move_saved_sql_selection(-1),
+            WorkspaceAction::OpenSavedSqlSelection => {
+                let result = self.open_saved_sql_selection();
+                self.handle_error(result);
+            }
+            WorkspaceAction::OpenSaveSqlDialog => {
+                let result = self.open_save_sql_dialog();
+                self.handle_error(result);
+            }
+            WorkspaceAction::CloseSaveSqlDialog => self.close_save_sql_dialog(),
+            WorkspaceAction::ConfirmSaveSql => {
+                let result = self.confirm_save_sql();
+                self.handle_error(result);
+            }
+            WorkspaceAction::DeleteSavedSqlFromEditor => {
+                let result = self.delete_saved_sql_from_editor();
                 self.handle_error(result);
             }
             WorkspaceAction::OpenDataFilter => {
@@ -998,6 +1090,8 @@ impl WorkspaceApp {
             data_grid_focused: self.data_grid_focused(),
             command_palette: self.command_palette.as_ref().map(CommandPaletteState::view),
             sql_history: self.sql_history.view(),
+            saved_sql: self.saved_sql.view(),
+            save_sql_dialog: self.save_sql_dialog_view(),
             data_filter: self.data_filter_view(),
             cell_edit: self.cell_edit_view(),
             row_inspector: self.row_inspector_view(),
@@ -1143,6 +1237,14 @@ impl WorkspaceApp {
         self.sql_history.open
     }
 
+    pub fn saved_sql_open(&self) -> bool {
+        self.saved_sql.open
+    }
+
+    pub fn save_sql_dialog_open(&self) -> bool {
+        self.save_sql_dialog.is_some()
+    }
+
     pub fn insert_sql_history_search_char(&mut self, ch: char) -> Result<()> {
         self.sql_history.insert_char(ch);
         Ok(())
@@ -1151,6 +1253,60 @@ impl WorkspaceApp {
     pub fn backspace_sql_history_search(&mut self) -> Result<()> {
         self.sql_history.backspace();
         Ok(())
+    }
+
+    pub fn insert_saved_sql_search_char(&mut self, ch: char) -> Result<()> {
+        self.saved_sql.insert_char(ch);
+        Ok(())
+    }
+
+    pub fn backspace_saved_sql_search(&mut self) -> Result<()> {
+        self.saved_sql.backspace();
+        Ok(())
+    }
+
+    pub fn insert_save_sql_name_char(&mut self, ch: char) -> Result<()> {
+        let dialog = self
+            .save_sql_dialog
+            .as_mut()
+            .ok_or_else(|| anyhow!("save SQL dialog is not open"))?;
+        dialog.name.push(ch);
+        Ok(())
+    }
+
+    pub fn backspace_save_sql_name(&mut self) -> Result<()> {
+        let dialog = self
+            .save_sql_dialog
+            .as_mut()
+            .ok_or_else(|| anyhow!("save SQL dialog is not open"))?;
+        dialog.name.pop();
+        Ok(())
+    }
+
+    pub fn clear_save_sql_name(&mut self) -> Result<()> {
+        let dialog = self
+            .save_sql_dialog
+            .as_mut()
+            .ok_or_else(|| anyhow!("save SQL dialog is not open"))?;
+        dialog.name.clear();
+        Ok(())
+    }
+
+    pub fn replace_saved_queries(&mut self, entries: Vec<SavedSqlEntry>) {
+        let selected_key = self
+            .entries
+            .get(self.selected_row)
+            .map(|entry| entry.key.clone());
+        self.saved_sql.replace_entries(entries);
+        self.rebuild_rows(selected_key);
+    }
+
+    pub fn saved_queries_snapshot(&self) -> Vec<SavedSqlEntry> {
+        self.saved_sql.entries.clone()
+    }
+
+    pub fn saved_queries_sync_sequence(&self) -> u64 {
+        self.saved_sql.sync_sequence
     }
 
     pub fn data_filter_open(&self) -> bool {
@@ -1322,22 +1478,21 @@ impl WorkspaceApp {
         };
 
         match entry.key {
+            TreeNodeKey::SavedQuery {
+                connection, name, ..
+            } => self.open_saved_sql_named(connection, &name),
             TreeNodeKey::Object { .. } => {
-                if self.active_right_tab == RightPaneTab::Sql {
-                    self.open_sql_editor()
+                let should_schedule_preview = self
+                    .selected_connection_index()
+                    .and_then(|index| self.sessions.get(index))
+                    .map(|session| session.pending.preview_request.is_none())
+                    .unwrap_or(true);
+                self.select_right_tab(RightPaneTab::Data);
+                self.focus_data_grid();
+                if should_schedule_preview {
+                    self.ensure_selected_object_preview()
                 } else {
-                    let should_schedule_preview = self
-                        .selected_connection_index()
-                        .and_then(|index| self.sessions.get(index))
-                        .map(|session| session.pending.preview_request.is_none())
-                        .unwrap_or(true);
-                    self.select_right_tab(RightPaneTab::Data);
-                    self.focus_data_grid();
-                    if should_schedule_preview {
-                        self.ensure_selected_object_preview()
-                    } else {
-                        Ok(())
-                    }
+                    Ok(())
                 }
             }
             _ => self.toggle_selected(),
@@ -1370,7 +1525,9 @@ impl WorkspaceApp {
             TreeNodeKey::Database { database, .. } => Some(database.as_str()),
             TreeNodeKey::Schema { database, .. } => Some(database.as_str()),
             TreeNodeKey::Group { database, .. } => Some(database.as_str()),
+            TreeNodeKey::SavedQueryGroup { database, .. } => Some(database.as_str()),
             TreeNodeKey::Object { object, .. } => Some(object.database.as_str()),
+            TreeNodeKey::SavedQuery { database, .. } => Some(database.as_str()),
             TreeNodeKey::Connection { .. } => self.selected_session()?.app.selected_database_name(),
         }
     }
@@ -1379,7 +1536,9 @@ impl WorkspaceApp {
         match &self.entries.get(self.selected_row)?.key {
             TreeNodeKey::Schema { schema, .. } => Some(schema.as_str()),
             TreeNodeKey::Group { schema, .. } => Some(schema.as_str()),
+            TreeNodeKey::SavedQueryGroup { schema, .. } => Some(schema.as_str()),
             TreeNodeKey::Object { object, .. } => Some(object.schema.as_str()),
+            TreeNodeKey::SavedQuery { schema, .. } => Some(schema.as_str()),
             TreeNodeKey::Connection { .. } | TreeNodeKey::Database { .. } => None,
         }
     }
@@ -2175,6 +2334,177 @@ impl WorkspaceApp {
         self.execute_editor()
     }
 
+    fn open_saved_sql(&mut self) {
+        self.saved_sql.open();
+    }
+
+    fn close_saved_sql(&mut self) {
+        self.saved_sql.open = false;
+    }
+
+    fn move_saved_sql_selection(&mut self, delta: isize) {
+        self.saved_sql.move_selection(delta);
+    }
+
+    fn open_saved_sql_selection(&mut self) -> Result<()> {
+        let entry = self
+            .saved_sql
+            .selected_entry()
+            .cloned()
+            .ok_or_else(|| anyhow!("no saved SQL item is selected"))?;
+        self.saved_sql.open = false;
+        self.open_saved_sql_entry(None, entry)
+    }
+
+    fn open_saved_sql_named(&mut self, connection_index: usize, name: &str) -> Result<()> {
+        let entry = self
+            .saved_sql
+            .entries
+            .iter()
+            .find(|entry| entry.name == name)
+            .cloned()
+            .ok_or_else(|| anyhow!("saved SQL `{name}` no longer exists"))?;
+        self.open_saved_sql_entry(Some(connection_index), entry)
+    }
+
+    fn open_saved_sql_entry(
+        &mut self,
+        preferred_connection_index: Option<usize>,
+        entry: SavedSqlEntry,
+    ) -> Result<()> {
+        let connection_index = preferred_connection_index
+            .or_else(|| {
+                entry.connection_name.as_deref().and_then(|name| {
+                    self.sessions
+                        .iter()
+                        .position(|session| session.name == name)
+                })
+            })
+            .or_else(|| self.active_editor_connection_index())
+            .or_else(|| self.selected_connection_index())
+            .ok_or_else(|| anyhow!("no connection is selected"))?;
+        let title = entry.name.clone();
+        let database_name = entry.database_name.clone();
+        let saved_query_name = entry.name.clone();
+        self.open_editor_tab(connection_index, database_name, title, entry.sql);
+        if let Some(tab) = self.active_editor_tab_mut() {
+            tab.saved_query_name = Some(saved_query_name);
+        }
+        self.active_right_tab = RightPaneTab::Sql;
+        self.focus_sql_editor();
+        self.reset_grid_scroll();
+        self.refresh_editor_completion();
+        Ok(())
+    }
+
+    fn open_save_sql_dialog(&mut self) -> Result<()> {
+        let tab = self
+            .active_editor_tab()
+            .ok_or_else(|| anyhow!("sql editor is not open"))?;
+        let sql = tab.buffer.sql();
+        if sql.trim().is_empty() {
+            return Err(anyhow!("enter SQL before saving it"));
+        }
+
+        self.save_sql_dialog = Some(SaveSqlDialogState {
+            name: tab.saved_query_name.clone().unwrap_or_default(),
+        });
+        Ok(())
+    }
+
+    fn close_save_sql_dialog(&mut self) {
+        self.save_sql_dialog = None;
+    }
+
+    fn confirm_save_sql(&mut self) -> Result<()> {
+        let dialog = self
+            .save_sql_dialog
+            .take()
+            .ok_or_else(|| anyhow!("save SQL dialog is not open"))?;
+        let name = dialog.name.trim();
+        if name.is_empty() {
+            return Err(anyhow!("saved SQL name cannot be empty"));
+        }
+
+        let tab = self
+            .active_editor_tab()
+            .ok_or_else(|| anyhow!("sql editor is not open"))?;
+        let sql = tab.buffer.sql();
+        if sql.trim().is_empty() {
+            return Err(anyhow!("enter SQL before saving it"));
+        }
+
+        let existing_saved_query_name = tab.saved_query_name.clone();
+        let connection_name = self
+            .sessions
+            .get(tab.connection_index)
+            .map(|session| session.name.clone());
+        let database_name = tab.database_name.clone();
+        let schema_name = existing_saved_query_name
+            .as_deref()
+            .and_then(|existing_name| {
+                self.saved_sql
+                    .entries
+                    .iter()
+                    .find(|entry| entry.name == existing_name)
+                    .and_then(|entry| entry.schema_name.clone())
+            })
+            .or_else(|| self.selected_schema_name().map(str::to_owned));
+        let title = name.to_string();
+        let entry = SavedSqlEntry {
+            name: title.clone(),
+            sql,
+            connection_name,
+            database_name,
+            schema_name,
+        };
+        if let Some(existing_name) = existing_saved_query_name.as_deref() {
+            if existing_name != name {
+                self.saved_sql.remove_by_name(existing_name);
+            }
+        }
+        self.saved_sql.upsert(entry);
+        if let Some(tab) = self.active_editor_tab_mut() {
+            tab.saved_query_name = Some(title.clone());
+            tab.title = title.clone();
+            tab.status = Some(format!("Saved SQL `{title}`."));
+        }
+        if let Some(editor) = self.editor.as_mut() {
+            editor.rebuild_tab_strip();
+        }
+        let selected_key = self
+            .entries
+            .get(self.selected_row)
+            .map(|entry| entry.key.clone());
+        self.rebuild_rows(selected_key);
+        self.workspace_status = Some(format!("Saved SQL `{title}`."));
+        Ok(())
+    }
+
+    fn delete_saved_sql_from_editor(&mut self) -> Result<()> {
+        let tab = self
+            .active_editor_tab()
+            .ok_or_else(|| anyhow!("sql editor is not open"))?;
+        let name = tab
+            .saved_query_name
+            .clone()
+            .ok_or_else(|| anyhow!("the active SQL tab is not linked to a saved query"))?;
+        self.delete_confirmation = Some(DeleteConfirmationState {
+            title: "Delete Saved SQL".to_string(),
+            message: format!("Remove saved query `{name}` from this workspace?"),
+            sql_preview: name.clone(),
+            warning: "Only the saved query entry is removed. The current editor tab stays open."
+                .to_string(),
+            help: "Press y to delete, n or Esc to cancel.".to_string(),
+            operation: PendingDeleteOperation::DeleteSavedSql {
+                name: name.clone(),
+                tab_id: tab.id,
+            },
+        });
+        self.workspace_status = Some(format!("Saved SQL `{name}` is waiting for confirmation."));
+        Ok(())
+    }
+
     fn open_data_filter(&mut self) -> Result<()> {
         if self.selected_object().is_none() {
             return Err(anyhow!("select a table-like object before filtering data"));
@@ -2445,6 +2775,11 @@ impl WorkspaceApp {
         })
     }
 
+    fn save_sql_dialog_view(&self) -> Option<SaveSqlDialogView<'_>> {
+        let dialog = self.save_sql_dialog.as_ref()?;
+        Some(SaveSqlDialogView { name: &dialog.name })
+    }
+
     fn cell_edit_view(&self) -> Option<CellEditView<'_>> {
         let edit = self.cell_edit.as_ref()?;
         Some(CellEditView {
@@ -2484,6 +2819,8 @@ impl WorkspaceApp {
             title: &confirmation.title,
             message: &confirmation.message,
             sql_preview: &confirmation.sql_preview,
+            warning: &confirmation.warning,
+            help: &confirmation.help,
         })
     }
 
@@ -2580,9 +2917,25 @@ impl WorkspaceApp {
                     kind,
                 }));
             }
+            TreeNodeKey::SavedQueryGroup {
+                connection,
+                database,
+                schema,
+            } => {
+                toggle_set(
+                    &mut self.sessions[connection].expanded_saved_query_groups,
+                    (database.clone(), schema.clone()),
+                );
+                self.rebuild_rows(Some(TreeNodeKey::SavedQueryGroup {
+                    connection,
+                    database,
+                    schema,
+                }));
+            }
             TreeNodeKey::Object { .. } => {
                 self.ensure_selected_object_preview()?;
             }
+            TreeNodeKey::SavedQuery { .. } => {}
         }
 
         Ok(())
@@ -2794,6 +3147,9 @@ impl WorkspaceApp {
             title: format!("Confirm {}", kind.label()),
             message: format!("This statement can delete data or schema on `{connection_name}`."),
             sql_preview: sql_preview(&sql),
+            warning: "Relora will send this statement to the database only after confirmation."
+                .to_string(),
+            help: "Press y to execute, n or Esc to cancel.".to_string(),
             operation: PendingDeleteOperation::ExecuteSql {
                 connection_index,
                 sql,
@@ -2819,6 +3175,23 @@ impl WorkspaceApp {
                 sql,
                 status,
             } => self.execute_sql_on_connection(connection_index, sql, status.as_deref()),
+            PendingDeleteOperation::DeleteSavedSql { name, tab_id } => {
+                self.saved_sql.remove_by_name(&name);
+                if let Some(editor) = self.editor.as_mut() {
+                    if let Some(tab) = editor.find_tab_mut_by_id(tab_id) {
+                        tab.saved_query_name = None;
+                        tab.status = Some(format!("Deleted saved SQL `{name}`."));
+                    }
+                    editor.rebuild_tab_strip();
+                }
+                let selected_key = self
+                    .entries
+                    .get(self.selected_row)
+                    .map(|entry| entry.key.clone());
+                self.rebuild_rows(selected_key);
+                self.workspace_status = Some(format!("Deleted saved SQL `{name}`."));
+                Ok(())
+            }
         }
     }
 
@@ -3020,7 +3393,7 @@ impl WorkspaceApp {
             .iter()
             .enumerate()
             .flat_map(|(connection_index, session)| {
-                build_rows_for_session(connection_index, session)
+                build_rows_for_session(connection_index, session, &self.saved_sql.entries)
             })
             .collect();
         self.tree_rows = self.entries.iter().map(|entry| entry.row.clone()).collect();
@@ -3052,7 +3425,9 @@ impl WorkspaceApp {
             | TreeNodeKey::Database { connection, .. }
             | TreeNodeKey::Schema { connection, .. }
             | TreeNodeKey::Group { connection, .. }
-            | TreeNodeKey::Object { connection, .. } => Some(*connection),
+            | TreeNodeKey::SavedQueryGroup { connection, .. }
+            | TreeNodeKey::Object { connection, .. }
+            | TreeNodeKey::SavedQuery { connection, .. } => Some(*connection),
         }
     }
 
@@ -4033,6 +4408,94 @@ impl SqlHistoryState {
     }
 }
 
+impl SavedSqlState {
+    fn view(&self) -> Option<SavedSqlView<'_>> {
+        self.open.then_some(SavedSqlView {
+            query: &self.query,
+            items: &self.visible_items,
+            selected_index: self.selected,
+        })
+    }
+
+    fn replace_entries(&mut self, entries: Vec<SavedSqlEntry>) {
+        self.entries = entries;
+        self.query.clear();
+        self.selected = 0;
+        self.open = false;
+        self.refresh_matches();
+    }
+
+    fn open(&mut self) {
+        self.open = true;
+        self.query.clear();
+        self.refresh_matches();
+    }
+
+    fn upsert(&mut self, entry: SavedSqlEntry) {
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|saved| saved.name == entry.name)
+        {
+            self.entries.remove(index);
+        }
+        self.entries.push(entry);
+        self.sync_sequence = self.sync_sequence.saturating_add(1);
+        self.refresh_matches();
+    }
+
+    fn remove_by_name(&mut self, name: &str) {
+        if let Some(index) = self.entries.iter().position(|entry| entry.name == name) {
+            self.entries.remove(index);
+            self.sync_sequence = self.sync_sequence.saturating_add(1);
+            self.refresh_matches();
+        }
+    }
+
+    fn insert_char(&mut self, ch: char) {
+        self.query.push(ch);
+        self.refresh_matches();
+    }
+
+    fn backspace(&mut self) {
+        self.query.pop();
+        self.refresh_matches();
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        if self.visible_items.is_empty() {
+            self.selected = 0;
+            return;
+        }
+
+        let len = self.visible_items.len();
+        let offset = delta.unsigned_abs() % len;
+        self.selected = if delta.is_negative() {
+            (self.selected + len - offset) % len
+        } else {
+            (self.selected + offset) % len
+        };
+    }
+
+    fn selected_entry(&self) -> Option<&SavedSqlEntry> {
+        self.visible_items.get(self.selected)
+    }
+
+    fn refresh_matches(&mut self) {
+        let query = self.query.to_ascii_lowercase();
+        self.visible_items = self
+            .entries
+            .iter()
+            .rev()
+            .filter(|entry| saved_sql_matches_query(entry, query.as_str()))
+            .cloned()
+            .collect();
+        self.selected = self
+            .selected
+            .min(self.visible_items.len().saturating_sub(1));
+    }
+}
+
 impl EditorCompletionState {
     fn view(&self) -> Option<EditorCompletionView<'_>> {
         (!self.items.is_empty()).then_some(EditorCompletionView {
@@ -4227,6 +4690,7 @@ impl SqlEditorTab {
             connection_index,
             database_name,
             title,
+            saved_query_name: None,
             buffer: SqlEditorBuffer::from_sql(&sql),
             status: None,
             result_sets: Vec::new(),
@@ -4291,7 +4755,35 @@ impl SqlEditorTab {
     }
 }
 
-fn build_rows_for_session(connection_index: usize, session: &ConnectionSession) -> Vec<TreeEntry> {
+fn saved_sql_matches_query(entry: &SavedSqlEntry, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+
+    entry.name.to_ascii_lowercase().contains(query)
+        || entry.sql.to_ascii_lowercase().contains(query)
+        || entry
+            .connection_name
+            .as_deref()
+            .map(|value| value.to_ascii_lowercase().contains(query))
+            .unwrap_or(false)
+        || entry
+            .database_name
+            .as_deref()
+            .map(|value| value.to_ascii_lowercase().contains(query))
+            .unwrap_or(false)
+        || entry
+            .schema_name
+            .as_deref()
+            .map(|value| value.to_ascii_lowercase().contains(query))
+            .unwrap_or(false)
+}
+
+fn build_rows_for_session(
+    connection_index: usize,
+    session: &ConnectionSession,
+    saved_sql_entries: &[SavedSqlEntry],
+) -> Vec<TreeEntry> {
     let mut rows = vec![TreeEntry {
         row: TreeRow::new(
             session.name.clone(),
@@ -4433,10 +4925,84 @@ fn build_rows_for_session(connection_index: usize, session: &ConnectionSession) 
                     });
                 }
             }
+
+            let saved_queries = saved_queries_for_schema(
+                session,
+                saved_sql_entries,
+                &database.name,
+                &schema.name,
+                database.schemas.len(),
+            );
+            if !saved_queries.is_empty() {
+                let group_key = (database.name.clone(), schema.name.clone());
+                let group_expanded = session.expanded_saved_query_groups.contains(&group_key);
+                rows.push(TreeEntry {
+                    row: TreeRow::new(
+                        "Queries",
+                        group_depth,
+                        true,
+                        group_expanded,
+                        Some(saved_queries.len().to_string()),
+                    ),
+                    key: TreeNodeKey::SavedQueryGroup {
+                        connection: connection_index,
+                        database: database.name.clone(),
+                        schema: schema.name.clone(),
+                    },
+                });
+
+                if group_expanded {
+                    for entry in saved_queries {
+                        rows.push(TreeEntry {
+                            row: TreeRow::new(
+                                entry.name.clone(),
+                                object_depth,
+                                false,
+                                false,
+                                Some("SQL".to_string()),
+                            ),
+                            key: TreeNodeKey::SavedQuery {
+                                connection: connection_index,
+                                database: database.name.clone(),
+                                schema: schema.name.clone(),
+                                name: entry.name.clone(),
+                            },
+                        });
+                    }
+                }
+            }
         }
     }
 
     rows
+}
+
+fn saved_queries_for_schema<'a>(
+    session: &ConnectionSession,
+    entries: &'a [SavedSqlEntry],
+    database_name: &str,
+    schema_name: &str,
+    schema_count: usize,
+) -> Vec<&'a SavedSqlEntry> {
+    let mut visible = entries
+        .iter()
+        .filter(|entry| {
+            entry
+                .connection_name
+                .as_deref()
+                .is_none_or(|value| value == session.name)
+                && entry
+                    .database_name
+                    .as_deref()
+                    .is_none_or(|value| value == database_name)
+                && match entry.schema_name.as_deref() {
+                    Some(value) => value == schema_name,
+                    None => schema_count <= 1,
+                }
+        })
+        .collect::<Vec<_>>();
+    visible.sort_by_cached_key(|entry| entry.name.to_ascii_lowercase());
+    visible
 }
 
 fn first_object_group_with_objects(

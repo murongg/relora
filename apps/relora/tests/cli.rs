@@ -1,8 +1,10 @@
 use clap::Parser;
 use relora::config::{
-    Cli, CliCommand, LaunchMode, default_connection_store_path, load_saved_connections_from_path,
-    save_saved_connections_to_path,
+    Cli, CliCommand, LaunchMode, default_connection_store_path, default_saved_sql_store_path,
+    load_saved_connections_from_path, load_saved_sql_from_path, save_saved_connections_to_path,
+    save_saved_sql_to_path,
 };
+use relora_app::workspace::SavedSqlEntry;
 use std::{
     path::PathBuf,
     sync::{Mutex, OnceLock},
@@ -67,6 +69,7 @@ where
             ("RELORA_CONNECTIONS", None),
             ("RELORA_DATABASE_URL", None),
             ("RELORA_CONNECTION_STORE", None),
+            ("RELORA_SAVED_SQL_STORE", None),
             ("DATABASE_URL", None),
             ("XDG_CONFIG_HOME", None),
         ],
@@ -204,6 +207,57 @@ fn default_connection_store_path_prefers_relora_store_env_var() {
 }
 
 #[test]
+fn default_saved_sql_store_path_prefers_relora_saved_sql_store_env_var() {
+    let store_path = std::env::temp_dir().join("relora-explicit-saved-sql.json");
+    with_env_vars(
+        &[
+            (
+                "RELORA_SAVED_SQL_STORE",
+                Some(store_path.to_string_lossy().as_ref()),
+            ),
+            ("XDG_CONFIG_HOME", None),
+            ("HOME", None),
+        ],
+        || {
+            assert_eq!(default_saved_sql_store_path(), store_path);
+        },
+    );
+}
+
+#[test]
+fn cli_loads_saved_sql_entries_from_store_path() {
+    without_connection_envs(|| {
+        let connection_store_path = temp_store_path("saved-sql-connections");
+        let saved_sql_store_path = temp_store_path("saved-sql-queries");
+        save_saved_sql_to_path(
+            &saved_sql_store_path,
+            &[SavedSqlEntry {
+                name: "Active users".to_string(),
+                sql: "select * from users where active = true;".to_string(),
+                connection_name: Some("pg".to_string()),
+                database_name: Some("postgres".to_string()),
+                schema_name: Some("public".to_string()),
+            }],
+        )
+        .expect("saved SQL should be written");
+
+        let cli = Cli::parse_from(["relora"]);
+        let config = cli
+            .into_config_with_paths(connection_store_path, saved_sql_store_path.clone())
+            .expect("config should load saved SQL entries");
+
+        assert_eq!(config.saved_sql.len(), 1);
+        assert_eq!(config.saved_sql[0].name, "Active users");
+        assert_eq!(
+            load_saved_sql_from_path(&saved_sql_store_path)
+                .expect("saved SQL should round-trip")
+                .len(),
+            1
+        );
+    });
+}
+
+#[test]
 fn cli_does_not_expose_cargo_driver_install_commands() {
     assert!(Cli::try_parse_from(["relora", "driver", "install", "postgres"]).is_err());
     assert!(Cli::try_parse_from(["relora", "driver", "install", "mysql"]).is_err());
@@ -223,6 +277,12 @@ fn paths_report_lists_store_path_and_known_driver_binaries() {
     let report = relora::commands::build_paths_report_with_store_path(store_path.clone());
 
     assert_eq!(report.connection_store_path, store_path);
+    assert!(
+        report
+            .saved_sql_store_path
+            .to_string_lossy()
+            .contains("saved-sql")
+    );
     assert_eq!(report.app_name, "relora");
     assert_eq!(report.drivers.len(), 3);
     assert_eq!(report.drivers[0].binary, "relora-driver-postgres");
@@ -238,5 +298,10 @@ fn paths_report_lists_store_path_and_known_driver_binaries() {
         json.get("connection_store_path")
             .and_then(|value| value.as_str()),
         Some(store_path.to_string_lossy().as_ref())
+    );
+    assert!(
+        json.get("saved_sql_store_path")
+            .and_then(|value| value.as_str())
+            .is_some()
     );
 }

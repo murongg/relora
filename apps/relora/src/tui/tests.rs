@@ -7,6 +7,7 @@ use std::{thread, time::Duration};
 use crate::launcher::{LauncherAction, LauncherApp, LauncherFormField};
 use anyhow::Result;
 use ratatui::backend::TestBackend;
+use relora_app::workspace::SavedSqlEntry;
 use relora_core::db::{
     Catalog, CatalogSummary, DatabaseDriver, DatabaseEntry, DatabaseKind, DbColumn, DbObjectKind,
     DbObjectRef, QueryResult, SchemaEntry, SqlExecutionResult, TablePreview,
@@ -1570,6 +1571,250 @@ fn launcher_attached_shell_supports_command_palette_sql_history_and_help_flow() 
         KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
     )?);
     assert!(matches!(shell, AppShell::Launcher(_)));
+    Ok(())
+}
+
+#[test]
+fn sql_editor_shortcuts_can_save_and_reopen_saved_sql() -> Result<()> {
+    let workspace = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+            )),
+        }],
+        50,
+    )?;
+    let launcher = LauncherApp::new(
+        vec![crate::config::ConnectionConfig {
+            name: "pg".to_string(),
+            url: "postgresql://postgres@localhost/postgres".to_string(),
+            read_only: false,
+        }],
+        std::env::temp_dir().join("relora-saved-sql-shell-flow-test.json"),
+    );
+    let mut shell = AppShell::Workspace(WorkspaceShell::with_launcher(workspace, launcher).into());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char(KEY_BROWSER_OPEN_SQL), KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &mut shell else {
+        panic!("workspace should stay active after opening the SQL editor");
+    };
+    workspace.set_editor_sql("select * from users where id = 7;")?;
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char(KEY_EDITOR_SAVE_SQL), KeyModifiers::CONTROL),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("save SQL should keep the workspace active");
+    };
+    assert!(workspace.save_sql_dialog_open());
+    assert_eq!(
+        workspace
+            .view()
+            .save_sql_dialog
+            .expect("save SQL dialog should render")
+            .name,
+        ""
+    );
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+    )?);
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+    )?);
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+    )?);
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+    )?);
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )?);
+
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("workspace should still be active after saving SQL");
+    };
+    assert!(!workspace.save_sql_dialog_open());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char(KEY_SAVED_SQL), KeyModifiers::CONTROL),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("opening saved SQL should keep the workspace active");
+    };
+    assert!(workspace.saved_sql_open());
+    assert_eq!(
+        workspace
+            .view()
+            .saved_sql
+            .expect("saved SQL overlay should render")
+            .items[0]
+            .name,
+        "fast"
+    );
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("workspace should stay active after opening saved SQL");
+    };
+    assert_eq!(
+        workspace
+            .editor_snapshot()
+            .expect("saved SQL should open in the editor")
+            .title,
+        "fast"
+    );
+    Ok(())
+}
+
+#[test]
+fn sql_editor_shortcuts_can_delete_the_active_saved_sql() -> Result<()> {
+    let mut workspace = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+            )),
+        }],
+        50,
+    )?;
+    workspace.replace_saved_queries(vec![SavedSqlEntry {
+        name: "fast".to_string(),
+        sql: "select * from users where id = 7;".to_string(),
+        connection_name: Some("pg".to_string()),
+        database_name: Some("postgres".to_string()),
+        schema_name: Some("public".to_string()),
+    }]);
+    let launcher = LauncherApp::new(
+        vec![crate::config::ConnectionConfig {
+            name: "pg".to_string(),
+            url: "postgresql://postgres@localhost/postgres".to_string(),
+            read_only: false,
+        }],
+        std::env::temp_dir().join("relora-saved-sql-delete-shell-flow-test.json"),
+    );
+    let mut shell = AppShell::Workspace(WorkspaceShell::with_launcher(workspace, launcher).into());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char(KEY_SAVED_SQL), KeyModifiers::CONTROL),
+    )?);
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )?);
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(
+            KeyCode::Char(KEY_EDITOR_DELETE_SAVED_SQL),
+            KeyModifiers::CONTROL
+        ),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("workspace should stay active while delete confirmation is open");
+    };
+    let confirmation = workspace
+        .view()
+        .delete_confirmation
+        .expect("ctrl delete should open confirmation for the active saved SQL");
+    assert!(confirmation.title.contains("Saved SQL"));
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("workspace should remain active after deleting a saved SQL");
+    };
+    assert!(workspace.saved_queries_snapshot().is_empty());
+    Ok(())
+}
+
+#[test]
+fn browser_enter_opens_saved_query_items_from_the_asset_tree() -> Result<()> {
+    let mut app = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+            )),
+        }],
+        50,
+    )?;
+    app.replace_saved_queries(vec![SavedSqlEntry {
+        name: "fast".to_string(),
+        sql: "select * from users where id = 7;".to_string(),
+        connection_name: Some("pg".to_string()),
+        database_name: Some("postgres".to_string()),
+        schema_name: Some("public".to_string()),
+    }]);
+
+    let queries_index = app
+        .tree_rows()
+        .iter()
+        .position(|row| row.label == "Queries")
+        .expect("queries group should exist");
+    app.select_tree_row_index(queries_index)?;
+    handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))?;
+
+    let query_index = app
+        .tree_rows()
+        .iter()
+        .position(|row| row.label == "fast")
+        .expect("saved query row should exist");
+    app.select_tree_row_index(query_index)?;
+    handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))?;
+
+    assert_eq!(app.active_right_tab(), RightPaneTab::Sql);
+    assert_eq!(app.active_editor_tab_title(), Some("fast"));
+    assert_eq!(
+        app.editor_snapshot()
+            .expect("saved query should open in the editor")
+            .sql,
+        "select * from users where id = 7;"
+    );
+    Ok(())
+}
+
+#[test]
+fn browser_enter_on_a_table_returns_to_data_from_sql_tab() -> Result<()> {
+    let mut app = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+            )),
+        }],
+        50,
+    )?;
+    app.apply_action(WorkspaceAction::OpenSqlEditor)?;
+    assert_eq!(app.active_right_tab(), RightPaneTab::Sql);
+
+    app.apply_action(WorkspaceAction::FocusAssets)?;
+    handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))?;
+
+    assert_eq!(app.active_right_tab(), RightPaneTab::Data);
+    assert!(app.data_grid_focused());
     Ok(())
 }
 

@@ -58,8 +58,6 @@ pub(super) const DRIVER_MISSING_WARNING: &str =
 pub(super) const DELETE_CONNECTION_WARNING_PROFILE: &str =
     "Only the saved Relora profile is removed.";
 pub(super) const DELETE_CONNECTION_WARNING_DATABASE: &str = "The database is not modified.";
-pub(super) const DELETE_OPERATION_WARNING: &str =
-    "Relora will send this statement to the database only after confirmation.";
 
 pub(super) const HELP_SECTION_GLOBAL: &str = "Global";
 pub(super) const HELP_SECTION_DATA: &str = "Data";
@@ -76,6 +74,7 @@ pub(super) const LOADING_STRUCTURE_MESSAGE: &str = "Loading structure...";
 pub(super) const NO_COLUMNS_MESSAGE: &str = "No columns available.";
 pub(super) const RUN_SQL_RESULTS_MESSAGE: &str = "Run SQL to see results here.";
 pub(super) const NO_MATCHING_COMMANDS_MESSAGE: &str = "No matching commands";
+pub(super) const NO_MATCHING_SAVED_SQL_MESSAGE: &str = "No matching saved SQL";
 pub(super) const NO_MATCHING_SQL_HISTORY_MESSAGE: &str = "No matching SQL history";
 pub(super) const READY_STATUS: &str = "Ready.";
 pub(super) const UNKNOWN_LABEL: &str = "Unknown";

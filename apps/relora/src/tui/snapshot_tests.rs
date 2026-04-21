@@ -3,6 +3,7 @@ use std::{collections::VecDeque, fs, path::PathBuf, thread, time::Duration};
 
 use anyhow::Result;
 use ratatui::backend::TestBackend;
+use relora_app::workspace::SavedSqlEntry;
 use relora_core::db::{
     Catalog, CatalogSummary, DatabaseDriver, DatabaseEntry, DatabaseKind, DbColumn, DbObjectKind,
     DbObjectRef, QueryResult, SchemaEntry, SqlExecutionResult, TablePreview,
@@ -334,6 +335,45 @@ fn sql_tab_snapshot_shell() -> Result<AppShell> {
     Ok(AppShell::Workspace(app.into()))
 }
 
+fn saved_sql_snapshot_shell() -> Result<AppShell> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "release_runs")])],
+            vec![preview(
+                &["id", "state", "updated_at"],
+                &[
+                    &["1", "running", "2026-04-21 10:00"],
+                    &["2", "done", "2026-04-21 09:58"],
+                ],
+            )],
+            vec![],
+            vec![],
+        )),
+    }];
+    let mut app = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    app.replace_saved_queries(vec![
+        SavedSqlEntry {
+            name: "Recent failures".to_string(),
+            sql: "select * from release_runs where state = 'failed' order by updated_at desc;"
+                .to_string(),
+            connection_name: Some("pg".to_string()),
+            database_name: Some("postgres".to_string()),
+            schema_name: Some("public".to_string()),
+        },
+        SavedSqlEntry {
+            name: "Running jobs".to_string(),
+            sql: "select id, state from release_runs where state = 'running';".to_string(),
+            connection_name: Some("pg".to_string()),
+            database_name: Some("postgres".to_string()),
+            schema_name: Some("public".to_string()),
+        },
+    ]);
+    app.apply_action(WorkspaceAction::OpenSavedSql)?;
+
+    Ok(AppShell::Workspace(app.into()))
+}
+
 fn structure_tab_snapshot_shell() -> Result<AppShell> {
     let bootstraps = vec![ConnectionBootstrap {
         name: "pg".to_string(),
@@ -406,6 +446,13 @@ fn sql_tab_golden_snapshot() -> Result<()> {
     let shell = sql_tab_snapshot_shell()?;
     let rendered = render_app_shell(&shell, 140, 32)?;
     assert_matches_snapshot("workspace_sql_tab", &rendered)
+}
+
+#[test]
+fn saved_sql_golden_snapshot() -> Result<()> {
+    let shell = saved_sql_snapshot_shell()?;
+    let rendered = render_app_shell(&shell, 120, 30)?;
+    assert_matches_snapshot("workspace_saved_sql", &rendered)
 }
 
 #[test]

@@ -1,4 +1,5 @@
 use super::*;
+use relora_app::view::{SaveSqlDialogView, SavedSqlView};
 use relora_core::db::{
     DatabaseKind, DbObjectRef, DriverCapabilities, ExplainFlavor, IdentifierQuoteStyle,
 };
@@ -41,8 +42,16 @@ pub(super) fn draw_workspace(frame: &mut Frame<'_>, app: &WorkspaceApp) {
         draw_cell_edit(frame, frame.area(), cell_edit);
     }
 
+    if let Some(save_sql_dialog) = view.save_sql_dialog {
+        draw_save_sql_dialog(frame, frame.area(), save_sql_dialog);
+    }
+
     if let Some(sql_history) = view.sql_history {
         draw_sql_history(frame, frame.area(), sql_history);
+    }
+
+    if let Some(saved_sql) = view.saved_sql {
+        draw_saved_sql(frame, frame.area(), saved_sql);
     }
 
     if let Some(command_palette) = view.command_palette {
@@ -466,12 +475,12 @@ pub(super) fn draw_workspace_delete_confirmation(
         )),
         Line::from(""),
         Line::from(Span::styled(
-            DELETE_OPERATION_WARNING,
+            confirmation.warning,
             Style::default().fg(TEXT_MUTED),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            DELETE_OPERATION_HELP,
+            confirmation.help,
             Style::default()
                 .fg(theme_accent_color())
                 .add_modifier(Modifier::BOLD),
@@ -1658,6 +1667,74 @@ pub(super) fn draw_sql_history(frame: &mut Frame<'_>, area: Rect, history: SqlHi
     frame.render_stateful_widget(list, sections[1], &mut state);
 }
 
+pub(super) fn draw_saved_sql(frame: &mut Frame<'_>, area: Rect, saved_sql: SavedSqlView<'_>) {
+    let popup = centered_rect(SQL_HISTORY_WIDTH_PERCENT, SQL_HISTORY_HEIGHT_PERCENT, area);
+    frame.render_widget(Clear, popup);
+
+    let block = focusable_block("Saved SQL | type search | Enter open | Esc close", true);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(MODAL_SEARCH_HEIGHT),
+            Constraint::Min(MODAL_BODY_MIN_HEIGHT),
+        ])
+        .split(inner);
+
+    let query = Paragraph::new(format!("? {}", saved_sql.query))
+        .block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .title(TITLE_SEARCH),
+        )
+        .wrap(Wrap { trim: true });
+    frame.render_widget(query, sections[0]);
+
+    let items = if saved_sql.items.is_empty() {
+        vec![ListItem::new(Line::from(NO_MATCHING_SAVED_SQL_MESSAGE))]
+    } else {
+        saved_sql
+            .items
+            .iter()
+            .map(|entry| {
+                let location = match (&entry.connection_name, &entry.database_name) {
+                    (Some(connection), Some(database)) => format!("{connection} · {database}"),
+                    (Some(connection), None) => connection.clone(),
+                    (None, Some(database)) => database.clone(),
+                    (None, None) => "workspace".to_string(),
+                };
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled(
+                            entry.name.as_str(),
+                            Style::default()
+                                .fg(TEXT_STRONG)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw("  "),
+                        Span::styled(location, Style::default().fg(theme_accent_color())),
+                    ]),
+                    Line::from(Span::styled(
+                        saved_sql_preview(entry.sql.as_str()),
+                        Style::default().fg(TEXT_MUTED),
+                    )),
+                ])
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let list = List::new(items)
+        .highlight_style(highlight_style())
+        .highlight_symbol(">> ");
+    let mut state = ListState::default();
+    if !saved_sql.items.is_empty() {
+        state.select(Some(saved_sql.selected_index));
+    }
+    frame.render_stateful_widget(list, sections[1], &mut state);
+}
+
 pub(super) fn draw_data_filter(frame: &mut Frame<'_>, area: Rect, filter: DataFilterView<'_>) {
     let popup = centered_rect(
         INLINE_MODAL_WIDTH_PERCENT,
@@ -1694,6 +1771,32 @@ pub(super) fn draw_cell_edit(frame: &mut Frame<'_>, area: Rect, edit: CellEditVi
         ))
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, popup);
+}
+
+pub(super) fn draw_save_sql_dialog(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    save_sql_dialog: SaveSqlDialogView<'_>,
+) {
+    let popup = centered_rect(
+        INLINE_MODAL_WIDTH_PERCENT,
+        INLINE_MODAL_HEIGHT_PERCENT,
+        area,
+    );
+    frame.render_widget(Clear, popup);
+
+    let paragraph = Paragraph::new(save_sql_dialog.name)
+        .block(focusable_block("Save SQL | Enter save | Esc close", true))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, popup);
+}
+
+fn saved_sql_preview(sql: &str) -> String {
+    sql.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| line.chars().take(72).collect::<String>())
+        .unwrap_or_default()
 }
 
 pub(super) fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
@@ -1740,6 +1843,10 @@ pub(super) fn draw_footer(frame: &mut Frame<'_>, area: Rect, view: WorkspaceView
         FOOTER_KEYBOARD_HELP
     } else if view.command_palette.is_some() {
         FOOTER_COMMAND_HELP
+    } else if view.saved_sql.is_some() {
+        FOOTER_SAVED_SQL_HELP
+    } else if view.save_sql_dialog.is_some() {
+        FOOTER_SAVE_SQL_HELP
     } else if view.sql_history.is_some() {
         FOOTER_SQL_HISTORY_HELP
     } else if view.data_filter.is_some() {

@@ -3,20 +3,20 @@
           │Global                                        SQL                                       │          
           │F1 / ?       Open or close help               e            Open SQL editor from browser │          
           │Ctrl-P       Open command palette             Ctrl-Enter   Run statement under cursor   │          
-          │F2 / Alt-1   Focus Data tab                   F10 / Ctrl-R Open SQL history             │          
-          │F3 / Alt-2   Focus SQL tab                    F11 / F12    Explain / analyze when       │          
-          │F4 / Alt-3   Focus Structure tab              supported                                 │          
-          │                                              Tab          Cycle editor, results, and   │          
-          │Data                                          assets                                    │          
-          │Tab          Cycle assets, grid, and editor                                             │          
-          │/            Open data filter                 Structure                                 │          
-          │n / p        Load next or previous page       F4 / Alt-3   Switch to structure tab      │          
-          │y / Y / w    Copy row, cell, or WHERE         Tab          Focus structure grid         │          
-          │i            Stage selected cell edit         Enter        Inspect selected field or row│          
+          │F2 / Alt-1   Focus Data tab                   Ctrl-S       Save current SQL             │          
+          │F3 / Alt-2   Focus SQL tab                    Ctrl-D       Delete the active saved SQL  │          
+          │F4 / Alt-3   Focus Structure tab              Ctrl-O       Open saved SQL               │          
+          │                                              F10 / Ctrl-R Open SQL history             │          
+          │Data                                          F11 / F12    Explain / analyze when       │          
+          │Tab          Cycle assets, grid, and editor   supported                                 │          
+          │/            Open data filter                 Tab          Cycle editor, results, and   │          
+          │n / p        Load next or previous page       assets                                    │          
+          │y / Y / w    Copy row, cell, or WHERE                                                   │          
+          │i            Stage selected cell edit         Structure                                 │          
+          │                                              F4 / Alt-3   Switch to structure tab      │          
+          │                                              Tab          Focus structure grid         │          
+          │                                              Enter        Inspect selected field or row│          
           │                                              [ / ] / =    Resize or reset column width │          
-          │                                                                                        │          
-          │                                                                                        │          
-          │                                                                                        │          
           │                                                                                        │          
           │                                                                                        │          
           │Driver Support                                                                          │          

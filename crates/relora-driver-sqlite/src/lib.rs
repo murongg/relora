@@ -45,6 +45,54 @@ impl SqliteDriver {
             .map(|column| column.name)
             .collect())
     }
+
+    fn load_object_columns_with_xinfo(&mut self, table: &DbObjectRef) -> Result<Vec<DbColumn>> {
+        let sql = format!(
+            "PRAGMA {}.table_xinfo({})",
+            quoted_identifier(&table.schema),
+            quoted_string(&table.name)
+        );
+        let mut statement = self.connection.prepare(&sql).with_context(|| {
+            format!(
+                "failed to describe {} using SQLite table_xinfo",
+                table.database_qualified_name()
+            )
+        })?;
+        let rows = statement.query_map([], |row| {
+            let hidden_flag = row.get::<_, i64>(6)?;
+            Ok((hidden_flag, parse_column_row(row)?))
+        })?;
+
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .context("failed to read SQLite xinfo columns")
+            .map(|columns| {
+                columns
+                    .into_iter()
+                    // SQLite marks internal virtual-table columns as hidden=1.
+                    // Generated columns are surfaced as 2/3 and should stay visible.
+                    .filter_map(|(hidden_flag, column)| (hidden_flag != 1).then_some(column))
+                    .collect()
+            })
+    }
+
+    fn load_object_columns_with_table_info(
+        &mut self,
+        table: &DbObjectRef,
+    ) -> Result<Vec<DbColumn>> {
+        let sql = format!(
+            "PRAGMA {}.table_info({})",
+            quoted_identifier(&table.schema),
+            quoted_string(&table.name)
+        );
+        let mut statement = self
+            .connection
+            .prepare(&sql)
+            .with_context(|| format!("failed to describe {}", table.database_qualified_name()))?;
+        let rows = statement.query_map([], parse_column_row)?;
+
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .context("failed to read SQLite columns")
+    }
 }
 
 impl DatabaseDriver for SqliteDriver {
@@ -72,11 +120,6 @@ impl DatabaseDriver for SqliteDriver {
         limit: usize,
         offset: usize,
     ) -> Result<TablePreview> {
-        let columns = self.load_columns(table)?;
-        if columns.is_empty() {
-            return Ok(TablePreview::default());
-        }
-
         let sql = format!(
             "SELECT * FROM {} LIMIT ?1 OFFSET ?2",
             sqlite_qualified_name(&table.schema, &table.name)
@@ -87,6 +130,11 @@ impl DatabaseDriver for SqliteDriver {
                 table.database_qualified_name()
             )
         })?;
+        let columns = statement
+            .column_names()
+            .into_iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
         let column_count = statement.column_count();
         let rows = statement.query_map([limit.max(1) as i64, offset as i64], |row| {
             row_to_strings(row, column_count)
@@ -148,27 +196,8 @@ impl DatabaseDriver for SqliteDriver {
     }
 
     fn load_object_columns(&mut self, table: &DbObjectRef) -> Result<Vec<DbColumn>> {
-        let sql = format!(
-            "PRAGMA {}.table_info({})",
-            quoted_identifier(&table.schema),
-            quoted_string(&table.name)
-        );
-        let mut statement = self
-            .connection
-            .prepare(&sql)
-            .with_context(|| format!("failed to describe {}", table.database_qualified_name()))?;
-        let rows = statement.query_map([], |row| {
-            Ok(DbColumn {
-                name: row.get(1)?,
-                data_type: row.get::<_, String>(2)?,
-                nullable: row.get::<_, i64>(3)? == 0,
-                has_default: row.get::<_, Option<String>>(4)?.is_some(),
-                is_primary_key: row.get::<_, i64>(5)? > 0,
-            })
-        })?;
-
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .context("failed to read SQLite columns")
+        self.load_object_columns_with_xinfo(table)
+            .or_else(|_| self.load_object_columns_with_table_info(table))
     }
 
     fn execute_sql(
@@ -299,6 +328,16 @@ fn sqlite_object_kind(object_type: &str) -> DbObjectKind {
     }
 }
 
+fn parse_column_row(row: &Row<'_>) -> rusqlite::Result<DbColumn> {
+    Ok(DbColumn {
+        name: row.get(1)?,
+        data_type: row.get::<_, String>(2)?,
+        nullable: row.get::<_, i64>(3)? == 0,
+        has_default: row.get::<_, Option<String>>(4)?.is_some(),
+        is_primary_key: row.get::<_, i64>(5)? > 0,
+    })
+}
+
 fn sqlite_qualified_name(schema: &str, table: &str) -> String {
     format!("{}.{}", quoted_identifier(schema), quoted_identifier(table))
 }
@@ -388,6 +427,44 @@ mod tests {
             results[0].clone().into_preview().rows,
             vec![vec!["grace@example.com"]]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn sqlite_preview_uses_query_columns_when_table_info_is_incomplete() -> Result<()> {
+        let mut driver = SqliteDriver::connect("sqlite::memory:")?;
+        driver.execute_sql(
+            None,
+            "CREATE TABLE metrics (
+                base INTEGER NOT NULL,
+                doubled INTEGER GENERATED ALWAYS AS (base * 2) STORED
+             );
+             INSERT INTO metrics (base) VALUES (3), (5);",
+        )?;
+
+        let table = DbObjectRef {
+            database: "main".to_string(),
+            schema: "main".to_string(),
+            name: "metrics".to_string(),
+            kind: DbObjectKind::Table,
+        };
+
+        let columns = driver.load_object_columns(&table)?;
+        assert_eq!(
+            columns
+                .into_iter()
+                .map(|column| column.name)
+                .collect::<Vec<_>>(),
+            vec!["base", "doubled"]
+        );
+
+        let preview = driver.load_preview(&table, 10)?;
+        assert_eq!(preview.columns, vec!["base", "doubled"]);
+        assert_eq!(preview.rows, vec![vec!["3", "6"], vec!["5", "10"]]);
+
+        let filtered = driver.load_filtered_preview(&table, "6", 10)?;
+        assert_eq!(filtered.columns, vec!["base", "doubled"]);
+        assert_eq!(filtered.rows, vec![vec!["3", "6"]]);
         Ok(())
     }
 }

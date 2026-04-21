@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, anyhow};
 use relora_core::db::DatabaseKind;
@@ -75,6 +79,7 @@ pub struct LauncherApp {
     marked_indexes: BTreeSet<usize>,
     selected_index: usize,
     form: Option<ConnectionFormState>,
+    sqlite_file_picker: Option<SqliteFilePickerState>,
     pending_missing_driver: Option<MissingDriverPrompt>,
     pending_delete_index: Option<usize>,
     status: Option<String>,
@@ -103,12 +108,34 @@ struct MissingDriverPrompt {
     env_var: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SqliteFilePickerState {
+    current_dir: PathBuf,
+    entries: Vec<SqliteFilePickerEntry>,
+    selected_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SqliteFilePickerEntry {
+    label: String,
+    path: PathBuf,
+    kind: SqliteFilePickerEntryKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SqliteFilePickerEntryKind {
+    Parent,
+    Directory,
+    File,
+}
+
 pub struct LauncherView<'a> {
     pub connections: &'a [ConnectionConfig],
     pub selected_index: usize,
     pub marked_indexes: &'a BTreeSet<usize>,
     pub status: Option<&'a str>,
     pub form: Option<LauncherFormView<'a>>,
+    pub sqlite_file_picker: Option<LauncherSqliteFilePickerView>,
     pub delete_confirmation: Option<LauncherDeleteConfirmationView<'a>>,
     pub missing_driver: Option<LauncherMissingDriverView<'a>>,
 }
@@ -139,6 +166,17 @@ pub struct LauncherFormView<'a> {
     pub status: Option<&'a str>,
 }
 
+pub struct LauncherSqliteFilePickerView {
+    pub current_dir: String,
+    pub selected_index: usize,
+    pub entries: Vec<LauncherSqliteFilePickerEntryView>,
+}
+
+pub struct LauncherSqliteFilePickerEntryView {
+    pub label: String,
+    pub is_directory: bool,
+}
+
 impl LauncherApp {
     pub fn new(connections: Vec<ConnectionConfig>, store_path: PathBuf) -> Self {
         Self::with_preview_limit(connections, store_path, 100)
@@ -154,6 +192,7 @@ impl LauncherApp {
             marked_indexes: BTreeSet::new(),
             selected_index: 0,
             form: None,
+            sqlite_file_picker: None,
             pending_missing_driver: None,
             pending_delete_index: None,
             status: None,
@@ -182,6 +221,7 @@ impl LauncherApp {
             LauncherAction::OpenCreateConnectionForm => {
                 self.pending_missing_driver = None;
                 self.pending_delete_index = None;
+                self.sqlite_file_picker = None;
                 self.form = Some(ConnectionFormState::new(None, None));
                 Ok(LauncherOutcome::Stay)
             }
@@ -195,6 +235,7 @@ impl LauncherApp {
                     Some(self.selected_index),
                     Some(connection),
                 ));
+                self.sqlite_file_picker = None;
                 self.pending_missing_driver = None;
                 Ok(LauncherOutcome::Stay)
             }
@@ -249,6 +290,7 @@ impl LauncherApp {
             }
             LauncherAction::CancelConnectionForm => {
                 self.form = None;
+                self.sqlite_file_picker = None;
                 self.pending_missing_driver = None;
                 self.pending_delete_index = None;
                 Ok(LauncherOutcome::Stay)
@@ -319,6 +361,114 @@ impl LauncherApp {
             .connection()
     }
 
+    pub fn sqlite_file_picker_view(&self) -> Option<LauncherSqliteFilePickerView> {
+        let picker = self.sqlite_file_picker.as_ref()?;
+        Some(LauncherSqliteFilePickerView {
+            current_dir: picker.current_dir.to_string_lossy().to_string(),
+            selected_index: picker.selected_index,
+            entries: picker
+                .entries
+                .iter()
+                .map(|entry| LauncherSqliteFilePickerEntryView {
+                    label: entry.label.clone(),
+                    is_directory: !matches!(entry.kind, SqliteFilePickerEntryKind::File),
+                })
+                .collect(),
+        })
+    }
+
+    pub fn sqlite_file_picker_is_open(&self) -> bool {
+        self.sqlite_file_picker.is_some()
+    }
+
+    pub fn open_sqlite_file_picker(&mut self) -> Result<()> {
+        let form = self
+            .form
+            .as_ref()
+            .ok_or_else(|| anyhow!("connection form is not open"))?;
+        if form.driver != LauncherDatabaseKind::Sqlite {
+            return Err(anyhow!(
+                "SQLite file browsing is only available for SQLite connections"
+            ));
+        }
+
+        let picker = SqliteFilePickerState::from_seed(form.database.trim())?;
+        self.pending_missing_driver = None;
+        self.sqlite_file_picker = Some(picker);
+        self.status = Some(
+            "Browsing SQLite files. Enter opens folders or selects a file; Esc closes.".to_string(),
+        );
+        Ok(())
+    }
+
+    pub fn cancel_sqlite_file_picker(&mut self) {
+        self.sqlite_file_picker = None;
+        self.status = Some("SQLite file picker closed.".to_string());
+    }
+
+    pub fn next_sqlite_file_picker_entry(&mut self) -> Result<()> {
+        let picker = self
+            .sqlite_file_picker
+            .as_mut()
+            .ok_or_else(|| anyhow!("SQLite file picker is not open"))?;
+        picker.move_selection(1);
+        Ok(())
+    }
+
+    pub fn previous_sqlite_file_picker_entry(&mut self) -> Result<()> {
+        let picker = self
+            .sqlite_file_picker
+            .as_mut()
+            .ok_or_else(|| anyhow!("SQLite file picker is not open"))?;
+        picker.move_selection(-1);
+        Ok(())
+    }
+
+    pub fn ascend_sqlite_file_picker(&mut self) -> Result<()> {
+        let picker = self
+            .sqlite_file_picker
+            .as_mut()
+            .ok_or_else(|| anyhow!("SQLite file picker is not open"))?;
+        picker.open_parent()?;
+        self.status = Some(format!(
+            "Browsing `{}`.",
+            picker.current_dir.to_string_lossy()
+        ));
+        Ok(())
+    }
+
+    pub fn submit_sqlite_file_picker(&mut self) -> Result<()> {
+        let outcome = self
+            .sqlite_file_picker
+            .as_mut()
+            .ok_or_else(|| anyhow!("SQLite file picker is not open"))?
+            .activate_selected()?;
+        match outcome {
+            SqliteFilePickerOutcome::Navigated => {
+                let picker = self
+                    .sqlite_file_picker
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("SQLite file picker is not open"))?;
+                self.status = Some(format!(
+                    "Browsing `{}`.",
+                    picker.current_dir.to_string_lossy()
+                ));
+            }
+            SqliteFilePickerOutcome::Selected(path) => {
+                let form = self
+                    .form
+                    .as_mut()
+                    .ok_or_else(|| anyhow!("connection form is not open"))?;
+                form.database = path.to_string_lossy().to_string();
+                form.url.clear();
+                form.field = LauncherFormField::Database;
+                self.sqlite_file_picker = None;
+                self.status = Some(format!("Selected SQLite file `{}`.", form.database));
+            }
+        }
+        Ok(())
+    }
+
     pub fn prompt_missing_driver(&mut self, kind: DatabaseKind, display_name: &str, binary: &str) {
         let env_var = drivers::driver_override_env_var(binary);
         self.pending_missing_driver = Some(MissingDriverPrompt {
@@ -386,6 +536,7 @@ impl LauncherApp {
                 editing_existing: form.editing_index.is_some(),
                 status: self.status(),
             }),
+            sqlite_file_picker: self.sqlite_file_picker_view(),
             delete_confirmation: self.pending_delete_index.and_then(|index| {
                 self.connections
                     .get(index)
@@ -520,6 +671,7 @@ impl LauncherApp {
         }
 
         self.form = None;
+        self.sqlite_file_picker = None;
         let saved_message = if let Some(index) = editing_index {
             self.connections[index] = connection.clone();
             self.selected_index = index;
@@ -582,31 +734,11 @@ impl ConnectionFormState {
     }
 
     fn switch_field(&mut self) {
-        self.field = match self.field {
-            LauncherFormField::Name => LauncherFormField::Driver,
-            LauncherFormField::Driver => LauncherFormField::Access,
-            LauncherFormField::Access => LauncherFormField::Host,
-            LauncherFormField::Host => LauncherFormField::Port,
-            LauncherFormField::Port => LauncherFormField::Database,
-            LauncherFormField::Database => LauncherFormField::Username,
-            LauncherFormField::Username => LauncherFormField::Password,
-            LauncherFormField::Password => LauncherFormField::Url,
-            LauncherFormField::Url => LauncherFormField::Name,
-        };
+        self.field = cycle_visible_form_field(self.visible_fields(), self.field, true);
     }
 
     fn previous_field(&mut self) {
-        self.field = match self.field {
-            LauncherFormField::Name => LauncherFormField::Url,
-            LauncherFormField::Driver => LauncherFormField::Name,
-            LauncherFormField::Access => LauncherFormField::Driver,
-            LauncherFormField::Host => LauncherFormField::Access,
-            LauncherFormField::Port => LauncherFormField::Host,
-            LauncherFormField::Database => LauncherFormField::Port,
-            LauncherFormField::Username => LauncherFormField::Database,
-            LauncherFormField::Password => LauncherFormField::Username,
-            LauncherFormField::Url => LauncherFormField::Password,
-        };
+        self.field = cycle_visible_form_field(self.visible_fields(), self.field, false);
     }
 
     fn cycle_driver_next(&mut self) {
@@ -675,16 +807,24 @@ impl ConnectionFormState {
     }
 
     fn set_driver(&mut self, next: LauncherDatabaseKind) {
+        let previous = self.driver;
         self.driver = next;
         if self.port.trim().is_empty() || ["5432", "3306"].contains(&self.port.trim()) {
             self.port = next.default_port().to_string();
         }
         if next == LauncherDatabaseKind::Sqlite {
             self.host.clear();
+            self.port.clear();
             self.username.clear();
             self.password.clear();
+            if previous != LauncherDatabaseKind::Sqlite {
+                self.database.clear();
+            }
         } else if self.host.trim().is_empty() {
             self.host = "localhost".to_string();
+        }
+        if !self.visible_fields().contains(&self.field) {
+            self.field = LauncherFormField::Database;
         }
     }
 
@@ -788,6 +928,195 @@ impl ConnectionFormState {
             }
         }
     }
+
+    fn visible_fields(&self) -> &'static [LauncherFormField] {
+        match self.driver {
+            LauncherDatabaseKind::Sqlite => &SQLITE_FORM_FIELDS,
+            LauncherDatabaseKind::Postgres | LauncherDatabaseKind::MySql => &SERVER_FORM_FIELDS,
+        }
+    }
+}
+
+const SERVER_FORM_FIELDS: [LauncherFormField; 9] = [
+    LauncherFormField::Name,
+    LauncherFormField::Driver,
+    LauncherFormField::Access,
+    LauncherFormField::Host,
+    LauncherFormField::Port,
+    LauncherFormField::Database,
+    LauncherFormField::Username,
+    LauncherFormField::Password,
+    LauncherFormField::Url,
+];
+
+const SQLITE_FORM_FIELDS: [LauncherFormField; 5] = [
+    LauncherFormField::Name,
+    LauncherFormField::Driver,
+    LauncherFormField::Access,
+    LauncherFormField::Database,
+    LauncherFormField::Url,
+];
+
+fn cycle_visible_form_field(
+    fields: &[LauncherFormField],
+    current: LauncherFormField,
+    forward: bool,
+) -> LauncherFormField {
+    let Some(index) = fields.iter().position(|field| *field == current) else {
+        return fields[0];
+    };
+    if forward {
+        fields[(index + 1) % fields.len()]
+    } else {
+        fields[(index + fields.len() - 1) % fields.len()]
+    }
+}
+
+enum SqliteFilePickerOutcome {
+    Navigated,
+    Selected(PathBuf),
+}
+
+impl SqliteFilePickerState {
+    fn from_seed(seed: &str) -> Result<Self> {
+        let (current_dir, selected_path) = sqlite_picker_seed(seed)?;
+        let mut picker = Self {
+            current_dir,
+            entries: Vec::new(),
+            selected_index: 0,
+        };
+        picker.reload(selected_path.as_deref())?;
+        Ok(picker)
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        if self.entries.is_empty() {
+            self.selected_index = 0;
+            return;
+        }
+
+        if delta.is_negative() {
+            self.selected_index = self.selected_index.saturating_sub(delta.unsigned_abs());
+        } else {
+            self.selected_index = self
+                .selected_index
+                .saturating_add(delta as usize)
+                .min(self.entries.len() - 1);
+        }
+    }
+
+    fn activate_selected(&mut self) -> Result<SqliteFilePickerOutcome> {
+        let entry = self
+            .entries
+            .get(self.selected_index)
+            .cloned()
+            .ok_or_else(|| anyhow!("no SQLite file picker entry is selected"))?;
+        match entry.kind {
+            SqliteFilePickerEntryKind::File => Ok(SqliteFilePickerOutcome::Selected(entry.path)),
+            SqliteFilePickerEntryKind::Directory | SqliteFilePickerEntryKind::Parent => {
+                self.current_dir = entry.path;
+                self.reload(None)?;
+                Ok(SqliteFilePickerOutcome::Navigated)
+            }
+        }
+    }
+
+    fn open_parent(&mut self) -> Result<()> {
+        if let Some(parent) = self.current_dir.parent() {
+            self.current_dir = parent.to_path_buf();
+            self.reload(None)?;
+        }
+        Ok(())
+    }
+
+    fn reload(&mut self, selected_path: Option<&Path>) -> Result<()> {
+        self.entries = read_sqlite_file_picker_entries(&self.current_dir)?;
+        self.selected_index = selected_path
+            .and_then(|path| self.entries.iter().position(|entry| entry.path == path))
+            .unwrap_or_else(|| {
+                self.entries
+                    .iter()
+                    .position(|entry| !matches!(entry.kind, SqliteFilePickerEntryKind::Parent))
+                    .unwrap_or(0)
+            })
+            .min(self.entries.len().saturating_sub(1));
+        Ok(())
+    }
+}
+
+fn sqlite_picker_seed(seed: &str) -> Result<(PathBuf, Option<PathBuf>)> {
+    let cwd = std::env::current_dir().context("failed to resolve the current directory")?;
+    let seed = seed.trim();
+    if seed.is_empty() || seed == ":memory:" {
+        return Ok((cwd, None));
+    }
+
+    let raw = PathBuf::from(seed);
+    let absolute = if raw.is_absolute() {
+        raw
+    } else {
+        cwd.join(raw)
+    };
+    if absolute.is_dir() {
+        return Ok((absolute, None));
+    }
+    if absolute.exists() {
+        let parent = absolute
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| cwd.clone());
+        return Ok((parent, Some(absolute)));
+    }
+    if let Some(parent) = absolute.parent().filter(|parent| parent.exists()) {
+        return Ok((parent.to_path_buf(), None));
+    }
+    Ok((cwd, None))
+}
+
+fn read_sqlite_file_picker_entries(directory: &Path) -> Result<Vec<SqliteFilePickerEntry>> {
+    let mut entries = Vec::new();
+    if let Some(parent) = directory.parent() {
+        entries.push(SqliteFilePickerEntry {
+            label: "../".to_string(),
+            path: parent.to_path_buf(),
+            kind: SqliteFilePickerEntryKind::Parent,
+        });
+    }
+
+    let mut directory_entries = fs::read_dir(directory)
+        .with_context(|| format!("failed to read SQLite directory `{}`", directory.display()))?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            let metadata = entry.metadata().ok()?;
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            let kind = if metadata.is_dir() {
+                SqliteFilePickerEntryKind::Directory
+            } else if metadata.is_file() {
+                SqliteFilePickerEntryKind::File
+            } else {
+                return None;
+            };
+            Some(SqliteFilePickerEntry {
+                label: match kind {
+                    SqliteFilePickerEntryKind::Parent => file_name,
+                    SqliteFilePickerEntryKind::Directory => format!("{file_name}/"),
+                    SqliteFilePickerEntryKind::File => file_name,
+                },
+                path,
+                kind,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    directory_entries.sort_by_key(|entry| {
+        (
+            !matches!(entry.kind, SqliteFilePickerEntryKind::Directory),
+            entry.label.to_ascii_lowercase(),
+        )
+    });
+    entries.extend(directory_entries);
+    Ok(entries)
 }
 
 impl LauncherDatabaseKind {
@@ -891,6 +1220,7 @@ mod tests {
     use super::*;
     use crate::config::{ConnectionConfig, load_saved_connections_from_path};
     use std::{
+        fs,
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -901,6 +1231,12 @@ mod tests {
             .expect("system time should be after unix epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("relora-launcher-{test_name}-{nanos}.json"))
+    }
+
+    fn temp_sqlite_dir(test_name: &str) -> PathBuf {
+        let dir = temp_store_path(test_name);
+        fs::create_dir_all(&dir).expect("temp sqlite directory should be created");
+        dir
     }
 
     fn move_form_to(launcher: &mut LauncherApp, field: LauncherFormField) -> Result<()> {
@@ -1166,6 +1502,69 @@ mod tests {
                 .expect("form should be open")
                 .read_only
         );
+        Ok(())
+    }
+
+    #[test]
+    fn launcher_sqlite_form_navigation_skips_server_fields() -> Result<()> {
+        let mut launcher = LauncherApp::new(Vec::new(), temp_store_path("sqlite-navigation"));
+
+        launcher.apply_action(LauncherAction::OpenCreateConnectionForm)?;
+        move_form_to(&mut launcher, LauncherFormField::Driver)?;
+        launcher.insert_form_char('s')?;
+
+        launcher.apply_action(LauncherAction::SwitchFormField)?;
+        assert_eq!(
+            launcher.form_snapshot().expect("form should be open").field,
+            LauncherFormField::Access
+        );
+
+        launcher.apply_action(LauncherAction::SwitchFormField)?;
+        assert_eq!(
+            launcher.form_snapshot().expect("form should be open").field,
+            LauncherFormField::Database
+        );
+
+        launcher.apply_action(LauncherAction::PreviousFormField)?;
+        assert_eq!(
+            launcher.form_snapshot().expect("form should be open").field,
+            LauncherFormField::Access
+        );
+        assert_eq!(
+            launcher
+                .form_snapshot()
+                .expect("form should be open")
+                .database,
+            ""
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn launcher_can_pick_sqlite_file_from_picker() -> Result<()> {
+        let sqlite_dir = temp_sqlite_dir("sqlite-picker");
+        let sqlite_path = sqlite_dir.join("relora.db");
+        fs::write(&sqlite_path, "").expect("sqlite file should be created");
+
+        let mut launcher = LauncherApp::new(Vec::new(), temp_store_path("sqlite-picker-store"));
+        launcher.apply_action(LauncherAction::OpenCreateConnectionForm)?;
+        move_form_to(&mut launcher, LauncherFormField::Driver)?;
+        launcher.insert_form_char('s')?;
+        move_form_to(&mut launcher, LauncherFormField::Database)?;
+        for ch in sqlite_dir.to_string_lossy().chars() {
+            launcher.insert_form_char(ch)?;
+        }
+
+        launcher.open_sqlite_file_picker()?;
+        assert!(launcher.sqlite_file_picker_is_open());
+
+        launcher.next_sqlite_file_picker_entry()?;
+        launcher.submit_sqlite_file_picker()?;
+
+        let form = launcher.form_snapshot().expect("form should remain open");
+        assert_eq!(form.field, LauncherFormField::Database);
+        assert_eq!(form.database, sqlite_path.to_string_lossy());
+        assert!(!launcher.sqlite_file_picker_is_open());
         Ok(())
     }
 

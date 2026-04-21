@@ -276,6 +276,10 @@ pub(super) fn draw_launcher(frame: &mut Frame<'_>, app: &LauncherApp) {
         draw_launcher_form(frame, frame.area(), form);
     }
 
+    if let Some(file_picker) = view.sqlite_file_picker {
+        draw_launcher_sqlite_file_picker(frame, frame.area(), file_picker);
+    }
+
     if let Some(delete_confirmation) = view.delete_confirmation {
         draw_launcher_delete_confirmation(frame, frame.area(), delete_confirmation);
     }
@@ -501,14 +505,53 @@ pub(super) fn draw_launcher_form(
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .margin(CONNECTION_FORM_MARGIN)
-        .constraints(connection_form_constraints())
+        .constraints(connection_form_constraints(form.driver))
         .split(popup);
     let password = if form.password.is_empty() {
         String::new()
     } else {
         "*".repeat(form.password.chars().count())
     };
-    let rows = [
+    let rows = launcher_form_rows(&form, &password);
+    for (index, (field, label, value)) in rows.iter().enumerate() {
+        draw_launcher_form_row(frame, sections[index], form.field == *field, label, value);
+    }
+    let help = if let Some(status) = form.status {
+        vec![
+            Line::from(Span::styled(status, Style::default().fg(TEXT_SECONDARY))),
+            Line::from(Span::styled(
+                form_help_label(form.driver),
+                Style::default().fg(TEXT_MUTED),
+            )),
+        ]
+    } else {
+        vec![Line::from(Span::styled(
+            form_help_label(form.driver),
+            Style::default().fg(TEXT_MUTED),
+        ))]
+    };
+    frame.render_widget(
+        Paragraph::new(help).wrap(Wrap { trim: true }),
+        sections[rows.len()],
+    );
+}
+
+fn connection_form_constraints(driver: crate::launcher::LauncherDatabaseKind) -> Vec<Constraint> {
+    let field_count = match driver {
+        crate::launcher::LauncherDatabaseKind::Sqlite => 5,
+        crate::launcher::LauncherDatabaseKind::Postgres
+        | crate::launcher::LauncherDatabaseKind::MySql => CONNECTION_FORM_FIELD_COUNT,
+    };
+    let mut constraints = vec![Constraint::Length(CONNECTION_FORM_FIELD_HEIGHT); field_count];
+    constraints.push(Constraint::Min(CONNECTION_FORM_HELP_MIN_HEIGHT));
+    constraints
+}
+
+fn launcher_form_rows(
+    form: &crate::launcher::LauncherFormView<'_>,
+    password: &str,
+) -> Vec<(LauncherFormField, &'static str, String)> {
+    let mut rows = vec![
         (
             LauncherFormField::Name,
             FORM_NAME_LABEL,
@@ -528,57 +571,58 @@ pub(super) fn draw_launcher_form(
                 "Read-write".to_string()
             },
         ),
-        (
-            LauncherFormField::Host,
-            FORM_HOST_LABEL,
-            form.host.to_string(),
-        ),
-        (
-            LauncherFormField::Port,
-            FORM_PORT_LABEL,
-            form.port.to_string(),
-        ),
-        (
-            LauncherFormField::Database,
-            FORM_DATABASE_LABEL,
-            form.database.to_string(),
-        ),
-        (
-            LauncherFormField::Username,
-            FORM_USERNAME_LABEL,
-            form.username.to_string(),
-        ),
-        (LauncherFormField::Password, FORM_PASSWORD_LABEL, password),
-        (LauncherFormField::Url, FORM_URL_LABEL, form.url.to_string()),
     ];
-    for (index, (field, label, value)) in rows.into_iter().enumerate() {
-        draw_launcher_form_row(frame, sections[index], form.field == field, label, &value);
+
+    match form.driver {
+        crate::launcher::LauncherDatabaseKind::Sqlite => {
+            rows.push((
+                LauncherFormField::Database,
+                FORM_SQLITE_FILE_LABEL,
+                form.database.to_string(),
+            ));
+        }
+        crate::launcher::LauncherDatabaseKind::Postgres
+        | crate::launcher::LauncherDatabaseKind::MySql => {
+            rows.extend([
+                (
+                    LauncherFormField::Host,
+                    FORM_HOST_LABEL,
+                    form.host.to_string(),
+                ),
+                (
+                    LauncherFormField::Port,
+                    FORM_PORT_LABEL,
+                    form.port.to_string(),
+                ),
+                (
+                    LauncherFormField::Database,
+                    FORM_DATABASE_LABEL,
+                    form.database.to_string(),
+                ),
+                (
+                    LauncherFormField::Username,
+                    FORM_USERNAME_LABEL,
+                    form.username.to_string(),
+                ),
+                (
+                    LauncherFormField::Password,
+                    FORM_PASSWORD_LABEL,
+                    password.to_string(),
+                ),
+            ]);
+        }
     }
-    let help = if let Some(status) = form.status {
-        vec![
-            Line::from(Span::styled(status, Style::default().fg(TEXT_SECONDARY))),
-            Line::from(Span::styled(
-                FORM_SAVE_HELP,
-                Style::default().fg(TEXT_MUTED),
-            )),
-        ]
-    } else {
-        vec![Line::from(Span::styled(
-            FORM_SAVE_HELP,
-            Style::default().fg(TEXT_MUTED),
-        ))]
-    };
-    frame.render_widget(
-        Paragraph::new(help).wrap(Wrap { trim: true }),
-        sections[CONNECTION_FORM_FIELD_COUNT],
-    );
+
+    rows.push((LauncherFormField::Url, FORM_URL_LABEL, form.url.to_string()));
+    rows
 }
 
-fn connection_form_constraints() -> Vec<Constraint> {
-    let mut constraints =
-        vec![Constraint::Length(CONNECTION_FORM_FIELD_HEIGHT); CONNECTION_FORM_FIELD_COUNT];
-    constraints.push(Constraint::Min(CONNECTION_FORM_HELP_MIN_HEIGHT));
-    constraints
+fn form_help_label(driver: crate::launcher::LauncherDatabaseKind) -> &'static str {
+    match driver {
+        crate::launcher::LauncherDatabaseKind::Sqlite => FORM_SAVE_HELP_SQLITE,
+        crate::launcher::LauncherDatabaseKind::Postgres
+        | crate::launcher::LauncherDatabaseKind::MySql => FORM_SAVE_HELP,
+    }
 }
 
 fn draw_launcher_form_row(
@@ -599,6 +643,91 @@ fn draw_launcher_form_row(
     frame.render_widget(
         Paragraph::new(format!("{prefix}{label}: {value}")).style(style),
         area,
+    );
+}
+
+pub(super) fn draw_launcher_sqlite_file_picker(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    picker: crate::launcher::LauncherSqliteFilePickerView,
+) {
+    let popup = centered_rect(
+        SQLITE_FILE_PICKER_WIDTH_PERCENT,
+        SQLITE_FILE_PICKER_HEIGHT_PERCENT,
+        area,
+    );
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme_accent_color()))
+        .style(Style::default().bg(SURFACE_CARD).fg(TEXT_STRONG))
+        .title(TITLE_SQLITE_FILE_PICKER);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(CONNECTION_FORM_MARGIN)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(3),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                picker.current_dir,
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                "Choose an existing SQLite file. Directories open in place.",
+                Style::default().fg(TEXT_MUTED),
+            )),
+        ]),
+        sections[0],
+    );
+
+    let items = if picker.entries.is_empty() {
+        vec![ListItem::new(Span::styled(
+            "No files found in this folder.",
+            Style::default().fg(TEXT_MUTED),
+        ))]
+    } else {
+        picker
+            .entries
+            .iter()
+            .map(|entry| {
+                let prefix = if entry.is_directory { "› " } else { "  " };
+                ListItem::new(format!("{prefix}{}", entry.label))
+            })
+            .collect()
+    };
+    let mut state = ListState::default();
+    if !picker.entries.is_empty() {
+        state.select(Some(picker.selected_index));
+    }
+    frame.render_stateful_widget(
+        List::new(items)
+            .highlight_style(
+                Style::default()
+                    .bg(SELECTION_BACKGROUND)
+                    .fg(TEXT_SELECTED)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol(">> "),
+        sections[1],
+        &mut state,
+    );
+
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            SQLITE_FILE_PICKER_HELP,
+            Style::default().fg(TEXT_MUTED),
+        )),
+        sections[2],
     );
 }
 

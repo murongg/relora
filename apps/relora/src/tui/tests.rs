@@ -1,5 +1,6 @@
 use super::*;
 use std::collections::VecDeque;
+use std::fs;
 use std::sync::mpsc;
 use std::{thread, time::Duration};
 
@@ -1918,10 +1919,43 @@ fn launcher_connection_form_renders_structured_database_fields() -> Result<()> {
 
     assert!(rendered.contains("Driver: MySQL/MariaDB"));
     assert!(rendered.contains("Mode: Read-only"));
-    assert!(rendered.contains("Host / SQLite path"));
+    assert!(rendered.contains("Host: localhost"));
     assert!(rendered.contains("User: alice"));
     assert!(rendered.contains("Password: ******"));
     assert!(!rendered.contains("secret"));
+    Ok(())
+}
+
+#[test]
+fn launcher_sqlite_form_renders_sqlite_file_field_and_hint() -> Result<()> {
+    let mut launcher = LauncherApp::new(
+        Vec::new(),
+        std::env::temp_dir().join("relora-launcher-sqlite-form-render-test.json"),
+    );
+    launcher.apply_action(LauncherAction::OpenCreateConnectionForm)?;
+    launcher.apply_action(LauncherAction::SwitchFormField)?;
+    launcher.insert_form_char('s')?;
+
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend)?;
+
+    terminal.draw(|frame| draw(frame, &AppShell::Launcher(Box::new(launcher))))?;
+
+    let buffer = terminal.backend().buffer();
+    let rendered = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Driver: SQLite"));
+    assert!(rendered.contains("SQLite file:"));
+    assert!(rendered.contains("Ctrl-O browses files"));
+    assert!(!rendered.contains("Host:"));
+    assert!(!rendered.contains("Port:"));
     Ok(())
 }
 
@@ -1998,6 +2032,72 @@ fn launcher_form_arrow_keys_move_up_and_cycle_driver() -> Result<()> {
             .expect("form should be open")
             .read_only
     );
+    Ok(())
+}
+
+#[test]
+fn launcher_form_ctrl_o_opens_sqlite_file_picker() -> Result<()> {
+    let mut launcher = LauncherApp::new(
+        Vec::new(),
+        std::env::temp_dir().join("relora-launcher-sqlite-picker-shortcut-test.json"),
+    );
+    launcher.apply_action(LauncherAction::OpenCreateConnectionForm)?;
+
+    handle_launcher_form_key(
+        &mut launcher,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::empty()),
+    )?;
+    handle_launcher_form_key(
+        &mut launcher,
+        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::empty()),
+    )?;
+    handle_launcher_form_key(
+        &mut launcher,
+        KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
+    )?;
+
+    assert!(launcher.sqlite_file_picker_is_open());
+    Ok(())
+}
+
+#[test]
+fn launcher_sqlite_file_picker_renders_directory_entries() -> Result<()> {
+    let sqlite_dir = std::env::temp_dir().join("relora-launcher-sqlite-picker-render");
+    fs::create_dir_all(&sqlite_dir)?;
+    fs::write(sqlite_dir.join("demo.db"), "")?;
+
+    let mut launcher = LauncherApp::new(
+        Vec::new(),
+        std::env::temp_dir().join("relora-launcher-sqlite-picker-render-test.json"),
+    );
+    launcher.apply_action(LauncherAction::OpenCreateConnectionForm)?;
+    launcher.apply_action(LauncherAction::SwitchFormField)?;
+    launcher.insert_form_char('s')?;
+    launcher.apply_action(LauncherAction::SwitchFormField)?;
+    launcher.apply_action(LauncherAction::SwitchFormField)?;
+    for ch in sqlite_dir.to_string_lossy().chars() {
+        launcher.insert_form_char(ch)?;
+    }
+    launcher.open_sqlite_file_picker()?;
+
+    let backend = TestBackend::new(100, 32);
+    let mut terminal = Terminal::new(backend)?;
+
+    terminal.draw(|frame| draw(frame, &AppShell::Launcher(Box::new(launcher))))?;
+
+    let buffer = terminal.backend().buffer();
+    let rendered = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Select SQLite File"));
+    assert!(rendered.contains("demo.db"));
+    assert!(rendered.contains("SQLite files: Enter open/select"));
     Ok(())
 }
 

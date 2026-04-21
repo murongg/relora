@@ -234,6 +234,32 @@ pub(super) fn handle_launcher_key(app: &mut AppShell, key: KeyEvent) -> Result<b
 }
 
 pub(super) fn handle_launcher_form_key(launcher: &mut LauncherApp, key: KeyEvent) -> Result<bool> {
+    if launcher.sqlite_file_picker_is_open() {
+        match key.code {
+            KeyCode::Esc => {
+                launcher.cancel_sqlite_file_picker();
+                return Ok(false);
+            }
+            KeyCode::Enter => {
+                launcher.submit_sqlite_file_picker()?;
+                return Ok(false);
+            }
+            KeyCode::Down | KeyCode::Char(KEY_LAUNCHER_DOWN) => {
+                launcher.next_sqlite_file_picker_entry()?;
+                return Ok(false);
+            }
+            KeyCode::Up | KeyCode::Char(KEY_LAUNCHER_UP) => {
+                launcher.previous_sqlite_file_picker_entry()?;
+                return Ok(false);
+            }
+            KeyCode::Left | KeyCode::Backspace => {
+                launcher.ascend_sqlite_file_picker()?;
+                return Ok(false);
+            }
+            _ => return Ok(false),
+        }
+    }
+
     if launcher.pending_missing_driver().is_some() {
         match key.code {
             KeyCode::Enter
@@ -269,6 +295,14 @@ pub(super) fn handle_launcher_form_key(launcher: &mut LauncherApp, key: KeyEvent
         }
         KeyCode::Backspace => {
             launcher.backspace_form()?;
+        }
+        KeyCode::Char(KEY_FORM_OPEN_FILE) | KeyCode::Char('O')
+            if key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            match launcher.open_sqlite_file_picker() {
+                Ok(()) => {}
+                Err(error) => launcher.set_status(format!("SQLite browse failed: {error}")),
+            }
         }
         KeyCode::Char(KEY_LAUNCHER_TEST_CONNECTION) | KeyCode::Char('T')
             if key.modifiers.contains(KeyModifiers::CONTROL) =>

@@ -104,6 +104,23 @@ fn render_workspace_data_tab_dense_grid(c: &mut Criterion) {
     });
 }
 
+fn render_workspace_assets_expanded_tree(c: &mut Criterion) {
+    c.bench_function("render_workspace_assets_expanded_tree", |b| {
+        b.iter_batched(
+            build_assets_tree_workspace,
+            |workspace| {
+                let mut terminal =
+                    Terminal::new(TestBackend::new(220, 64)).expect("terminal should build");
+                terminal
+                    .draw(|frame| render_workspace_for_benchmark(frame, &workspace))
+                    .expect("workspace render should succeed");
+                black_box(terminal.backend().buffer().area.height);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
 fn render_workspace_sql_tab_result_grid(c: &mut Criterion) {
     c.bench_function("render_workspace_sql_tab_result_grid", |b| {
         b.iter_batched(
@@ -154,6 +171,23 @@ fn build_dense_grid_workspace() -> WorkspaceApp {
         .apply_action(WorkspaceAction::FocusDataGrid)
         .expect("grid focus should succeed");
     workspace.select_grid_cell(24, 12);
+    workspace
+}
+
+fn build_assets_tree_workspace() -> WorkspaceApp {
+    let mut workspace = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(MockDriver::new(
+                vec![catalog_with_tables("postgres", 96, 48)],
+                vec![build_preview(12, 32, 16)],
+            )),
+        }],
+        100,
+    )
+    .expect("workspace should bootstrap for assets tree render benchmark");
+    expand_all_schema_table_groups(&mut workspace, 96)
+        .expect("expanded tree should build for assets benchmark");
     workspace
 }
 
@@ -246,6 +280,29 @@ fn drain_until_sql_results_ready(workspace: &mut WorkspaceApp) -> Result<()> {
     ))
 }
 
+fn expand_all_schema_table_groups(workspace: &mut WorkspaceApp, schema_count: usize) -> Result<()> {
+    for schema_index in 1..schema_count {
+        let schema_label = format!("schema_{schema_index:03}");
+        let schema_row = tree_row_index(workspace, &schema_label);
+        workspace.select_tree_row_index(schema_row)?;
+        workspace.apply_action(WorkspaceAction::ToggleNode)?;
+
+        let group_row = schema_row + 1;
+        workspace.select_tree_row_index(group_row)?;
+        workspace.apply_action(WorkspaceAction::ToggleNode)?;
+    }
+
+    Ok(())
+}
+
+fn tree_row_index(workspace: &WorkspaceApp, label: &str) -> usize {
+    workspace
+        .tree_rows()
+        .iter()
+        .position(|row| row.label == label)
+        .unwrap_or_else(|| panic!("tree row {label} should exist"))
+}
+
 fn catalog_with_table(database: &str, schema: &str, table: &str) -> Catalog {
     Catalog {
         databases: vec![DatabaseEntry {
@@ -260,6 +317,31 @@ fn catalog_with_table(database: &str, schema: &str, table: &str) -> Catalog {
                     kind: DbObjectKind::Table,
                 }],
             }],
+        }],
+    }
+}
+
+fn catalog_with_tables(database: &str, schema_count: usize, table_count: usize) -> Catalog {
+    Catalog {
+        databases: vec![DatabaseEntry {
+            name: database.to_string(),
+            schemas: (0..schema_count)
+                .map(|schema_index| {
+                    let schema = format!("schema_{schema_index:03}");
+                    SchemaEntry {
+                        database: database.to_string(),
+                        name: schema.clone(),
+                        objects: (0..table_count)
+                            .map(|index| DbObjectRef {
+                                database: database.to_string(),
+                                schema: schema.clone(),
+                                name: format!("table_{index:03}"),
+                                kind: DbObjectKind::Table,
+                            })
+                            .collect(),
+                    }
+                })
+                .collect(),
         }],
     }
 }
@@ -317,6 +399,7 @@ fn long_text_payload() -> String {
 
 criterion_group!(
     benches,
+    render_workspace_assets_expanded_tree,
     render_workspace_data_tab_dense_grid,
     render_workspace_sql_tab_result_grid,
     render_workspace_row_inspector_long_text

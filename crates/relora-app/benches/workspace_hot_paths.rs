@@ -1,6 +1,10 @@
 use std::collections::VecDeque;
 use std::hint::black_box;
-use std::sync::mpsc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+    mpsc,
+};
 use std::thread;
 use std::time::Duration;
 
@@ -25,6 +29,14 @@ struct BlockingPreviewDriver {
     previews: VecDeque<TablePreview>,
     unblock_preview: Option<mpsc::Receiver<()>>,
     preview_calls: usize,
+}
+
+#[derive(Debug)]
+struct BlockingCatalogStormDriver {
+    catalogs: VecDeque<Catalog>,
+    previews: VecDeque<TablePreview>,
+    unblock_catalog: Option<mpsc::Receiver<()>>,
+    catalog_calls: Arc<AtomicUsize>,
 }
 
 impl MockDriver {
@@ -53,6 +65,22 @@ impl BlockingPreviewDriver {
             previews: VecDeque::from(previews),
             unblock_preview: Some(unblock_preview),
             preview_calls: 0,
+        }
+    }
+}
+
+impl BlockingCatalogStormDriver {
+    fn new(
+        catalogs: Vec<Catalog>,
+        previews: Vec<TablePreview>,
+        unblock_catalog: mpsc::Receiver<()>,
+        catalog_calls: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            catalogs: VecDeque::from(catalogs),
+            previews: VecDeque::from(previews),
+            unblock_catalog: Some(unblock_catalog),
+            catalog_calls,
         }
     }
 }
@@ -168,14 +196,74 @@ impl DatabaseDriver for BlockingPreviewDriver {
     }
 }
 
+impl DatabaseDriver for BlockingCatalogStormDriver {
+    fn kind(&self) -> DatabaseKind {
+        DatabaseKind::Postgres
+    }
+
+    fn connection_label(&self) -> &str {
+        "mock://postgres"
+    }
+
+    fn load_catalog(&mut self) -> Result<Catalog> {
+        let previous = self.catalog_calls.fetch_add(1, Ordering::SeqCst);
+        if previous >= 1 {
+            if let Some(receiver) = self.unblock_catalog.take() {
+                receiver
+                    .recv()
+                    .map_err(|_| anyhow::anyhow!("catalog unblock signal was dropped"))?;
+            }
+        }
+
+        self.catalogs
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
+    }
+
+    fn load_preview_page(
+        &mut self,
+        _table: &DbObjectRef,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<TablePreview> {
+        self.previews
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("missing mocked preview"))
+    }
+
+    fn load_filtered_preview_page(
+        &mut self,
+        table: &DbObjectRef,
+        _filter: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<TablePreview> {
+        self.load_preview_page(table, limit, offset)
+    }
+
+    fn load_object_columns(&mut self, _table: &DbObjectRef) -> Result<Vec<DbColumn>> {
+        Ok(Vec::new())
+    }
+
+    fn execute_sql(
+        &mut self,
+        _database: Option<&str>,
+        _sql: &str,
+    ) -> Result<Vec<SqlExecutionResult>> {
+        Err(anyhow::anyhow!(
+            "sql execution is not used in this benchmark"
+        ))
+    }
+}
+
 fn workspace_bootstrap_large_catalog(c: &mut Criterion) {
-    let catalog = build_catalog(12, 16, 18);
-    let preview = build_preview(12, 80, 24);
+    let catalog = build_catalog(18, 24, 48);
+    let preview = build_preview(16, 120, 28);
 
     c.bench_function("workspace_bootstrap_large_catalog", |b| {
         b.iter_batched(
             || {
-                (0..3)
+                (0..4)
                     .map(|index| ConnectionBootstrap {
                         name: format!("pg-{index}"),
                         driver: Box::new(MockDriver::new(
@@ -190,6 +278,21 @@ fn workspace_bootstrap_large_catalog(c: &mut Criterion) {
                     .expect("workspace should bootstrap for large catalog benchmark");
                 black_box(workspace.tree_rows().len());
                 black_box(workspace.selected_connection_object_count());
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
+fn workspace_expand_large_catalog_tree(c: &mut Criterion) {
+    c.bench_function("workspace_expand_large_catalog_tree", |b| {
+        b.iter_batched(
+            build_expandable_catalog_workspace,
+            |mut workspace| {
+                expand_all_schema_table_groups(&mut workspace, 160)
+                    .expect("expanding the large catalog tree should succeed");
+                black_box(workspace.tree_rows().len());
+                black_box(workspace.selected_row_index());
             },
             BatchSize::SmallInput,
         );
@@ -269,6 +372,46 @@ fn workspace_switch_sql_result_sets(c: &mut Criterion) {
     });
 }
 
+fn workspace_refresh_storm_large_catalog(c: &mut Criterion) {
+    c.bench_function("workspace_refresh_storm_large_catalog", |b| {
+        b.iter_batched(
+            build_refresh_storm_workspace,
+            |(mut workspace, unblock_catalog_tx, catalog_calls)| {
+                for _ in 0..24 {
+                    workspace
+                        .apply_action(WorkspaceAction::Refresh)
+                        .expect("refresh should schedule");
+                }
+
+                unblock_catalog_tx
+                    .send(())
+                    .expect("catalog refresh should still be waiting");
+                drain_until_idle(&mut workspace)
+                    .expect("workspace should settle after the refresh storm");
+
+                black_box(workspace.tree_rows().len());
+                black_box(workspace.active_preview().rows.len());
+                black_box(catalog_calls.load(Ordering::SeqCst));
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
+fn build_expandable_catalog_workspace() -> WorkspaceApp {
+    WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(MockDriver::new(
+                vec![catalog_with_tables("postgres", 160, 72)],
+                vec![build_preview(12, 40, 16)],
+            )),
+        }],
+        100,
+    )
+    .expect("workspace should bootstrap for expanded tree benchmark")
+}
+
 fn build_wide_preview_workspace() -> WorkspaceApp {
     WorkspaceApp::bootstrap(
         vec![ConnectionBootstrap {
@@ -296,7 +439,7 @@ fn build_cancelable_preview_workspace() -> (WorkspaceApp, mpsc::Sender<()>) {
         ConnectionBootstrap {
             name: "analytics".to_string(),
             driver: Box::new(BlockingPreviewDriver::new(
-                vec![catalog_with_tables("analytics", "mart", 1)],
+                vec![catalog_with_tables_in_schema("analytics", "mart", 1)],
                 vec![
                     preview_from_values(&["event_id"], &[&["evt_0"]]),
                     preview_from_values(&["event_id"], &[&["evt_1"]]),
@@ -348,6 +491,34 @@ fn build_sql_results_workspace() -> WorkspaceApp {
     workspace
 }
 
+fn build_refresh_storm_workspace() -> (WorkspaceApp, mpsc::Sender<()>, Arc<AtomicUsize>) {
+    let catalog_calls = Arc::new(AtomicUsize::new(0));
+    let (unblock_catalog_tx, unblock_catalog_rx) = mpsc::channel();
+    let workspace = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(BlockingCatalogStormDriver::new(
+                vec![
+                    catalog_with_tables("postgres", 48, 96),
+                    catalog_with_tables_and_marker("postgres", 48, 96, "stale_refresh_marker"),
+                    catalog_with_tables_and_marker("postgres", 48, 96, "latest_refresh_marker"),
+                ],
+                vec![
+                    build_preview(10, 24, 16),
+                    build_preview(10, 24, 16),
+                    build_preview(10, 24, 16),
+                ],
+                unblock_catalog_rx,
+                catalog_calls.clone(),
+            )),
+        }],
+        100,
+    )
+    .expect("workspace should bootstrap for refresh storm benchmark");
+
+    (workspace, unblock_catalog_tx, catalog_calls)
+}
+
 fn drain_until_result_sets_ready(workspace: &mut WorkspaceApp) -> Result<()> {
     for _ in 0..40 {
         workspace.drain_background()?;
@@ -360,6 +531,41 @@ fn drain_until_result_sets_ready(workspace: &mut WorkspaceApp) -> Result<()> {
     Err(anyhow::anyhow!(
         "sql result sets did not become visible in time"
     ))
+}
+
+fn drain_until_idle(workspace: &mut WorkspaceApp) -> Result<()> {
+    for _ in 0..256 {
+        workspace.drain_background()?;
+        if !workspace.has_pending_tasks() {
+            return Ok(());
+        }
+        thread::yield_now();
+    }
+
+    Err(anyhow::anyhow!("workspace did not become idle in time"))
+}
+
+fn expand_all_schema_table_groups(workspace: &mut WorkspaceApp, schema_count: usize) -> Result<()> {
+    for schema_index in 1..schema_count {
+        let schema_label = format!("schema_{schema_index:03}");
+        let schema_row = tree_row_index(workspace, &schema_label);
+        workspace.select_tree_row_index(schema_row)?;
+        workspace.apply_action(WorkspaceAction::ToggleNode)?;
+
+        let group_row = schema_row + 1;
+        workspace.select_tree_row_index(group_row)?;
+        workspace.apply_action(WorkspaceAction::ToggleNode)?;
+    }
+
+    Ok(())
+}
+
+fn tree_row_index(workspace: &WorkspaceApp, label: &str) -> usize {
+    workspace
+        .tree_rows()
+        .iter()
+        .position(|row| row.label == label)
+        .unwrap_or_else(|| panic!("tree row {label} should exist"))
 }
 
 fn build_catalog(database_count: usize, schema_count: usize, objects_per_schema: usize) -> Catalog {
@@ -392,7 +598,7 @@ fn build_catalog(database_count: usize, schema_count: usize, objects_per_schema:
     }
 }
 
-fn catalog_with_tables(database: &str, schema: &str, table_count: usize) -> Catalog {
+fn catalog_with_tables_in_schema(database: &str, schema: &str, table_count: usize) -> Catalog {
     Catalog {
         databases: vec![DatabaseEntry {
             name: database.to_string(),
@@ -410,6 +616,47 @@ fn catalog_with_tables(database: &str, schema: &str, table_count: usize) -> Cata
             }],
         }],
     }
+}
+
+fn catalog_with_tables(database: &str, schema_count: usize, table_count: usize) -> Catalog {
+    Catalog {
+        databases: vec![DatabaseEntry {
+            name: database.to_string(),
+            schemas: (0..schema_count)
+                .map(|schema_index| {
+                    let schema = format!("schema_{schema_index:03}");
+                    SchemaEntry {
+                        database: database.to_string(),
+                        name: schema.clone(),
+                        objects: (0..table_count)
+                            .map(|index| DbObjectRef {
+                                database: database.to_string(),
+                                schema: schema.clone(),
+                                name: format!("table_{index:03}"),
+                                kind: DbObjectKind::Table,
+                            })
+                            .collect(),
+                    }
+                })
+                .collect(),
+        }],
+    }
+}
+
+fn catalog_with_tables_and_marker(
+    database: &str,
+    schema_count: usize,
+    table_count: usize,
+    marker: &str,
+) -> Catalog {
+    let mut catalog = catalog_with_tables(database, schema_count, table_count);
+    catalog.databases[0].schemas[0].objects.push(DbObjectRef {
+        database: database.to_string(),
+        schema: "schema_000".to_string(),
+        name: marker.to_string(),
+        kind: DbObjectKind::Table,
+    });
+    catalog
 }
 
 fn build_preview(column_count: usize, row_count: usize, cell_width: usize) -> TablePreview {
@@ -469,7 +716,9 @@ fn build_query_result_sets(
 criterion_group!(
     benches,
     workspace_bootstrap_large_catalog,
+    workspace_expand_large_catalog_tree,
     workspace_cancel_inflight_preview,
+    workspace_refresh_storm_large_catalog,
     workspace_scroll_wide_preview_columns,
     workspace_switch_sql_result_sets
 );

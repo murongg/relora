@@ -1,6 +1,10 @@
 use std::{
     collections::{BTreeMap, VecDeque},
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
     thread,
     time::Duration,
 };
@@ -76,6 +80,8 @@ struct BlockingCatalogDriver {
     columns: VecDeque<Vec<DbColumn>>,
     unblock_catalog: Option<mpsc::Receiver<()>>,
     catalog_calls: usize,
+    catalog_call_counter: Option<Arc<AtomicUsize>>,
+    catalog_wait_notifier: Option<mpsc::Sender<()>>,
 }
 
 struct TargetedBlockingDriver {
@@ -114,7 +120,19 @@ impl BlockingCatalogDriver {
             columns: VecDeque::from(columns),
             unblock_catalog: Some(unblock_catalog),
             catalog_calls: 0,
+            catalog_call_counter: None,
+            catalog_wait_notifier: None,
         }
+    }
+
+    fn with_catalog_call_counter(mut self, counter: Arc<AtomicUsize>) -> Self {
+        self.catalog_call_counter = Some(counter);
+        self
+    }
+
+    fn with_catalog_wait_notifier(mut self, notifier: mpsc::Sender<()>) -> Self {
+        self.catalog_wait_notifier = Some(notifier);
+        self
     }
 }
 
@@ -278,7 +296,13 @@ impl DatabaseDriver for BlockingCatalogDriver {
 
     fn load_catalog(&mut self) -> Result<Catalog> {
         self.catalog_calls += 1;
+        if let Some(counter) = &self.catalog_call_counter {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
         if self.catalog_calls > 1 {
+            if let Some(notifier) = self.catalog_wait_notifier.take() {
+                let _ = notifier.send(());
+            }
             if let Some(receiver) = self.unblock_catalog.take() {
                 receiver
                     .recv()
@@ -421,6 +445,48 @@ fn catalog(schema: &str, objects: &[(DbObjectKind, &str)]) -> Catalog {
                     })
                     .collect(),
             }],
+        }],
+    }
+}
+
+fn large_catalog_with_marker(
+    schema_count: usize,
+    objects_per_schema: usize,
+    marker: Option<&str>,
+) -> Catalog {
+    Catalog {
+        databases: vec![DatabaseEntry {
+            name: "postgres".to_string(),
+            schemas: (0..schema_count)
+                .map(|schema_index| {
+                    let schema_name = format!("schema_{schema_index:03}");
+                    let mut objects = (0..objects_per_schema)
+                        .map(|object_index| DbObjectRef {
+                            database: "postgres".to_string(),
+                            schema: schema_name.clone(),
+                            name: format!("table_{object_index:03}"),
+                            kind: DbObjectKind::Table,
+                        })
+                        .collect::<Vec<_>>();
+
+                    if schema_index == 0 {
+                        if let Some(marker) = marker {
+                            objects.push(DbObjectRef {
+                                database: "postgres".to_string(),
+                                schema: schema_name.clone(),
+                                name: marker.to_string(),
+                                kind: DbObjectKind::Table,
+                            });
+                        }
+                    }
+
+                    SchemaEntry {
+                        database: "postgres".to_string(),
+                        name: schema_name,
+                        objects,
+                    }
+                })
+                .collect(),
         }],
     }
 }
@@ -2703,6 +2769,64 @@ fn workspace_canceling_refresh_ignores_late_catalog_and_preview_results() -> Res
         .map(|row| row.label.as_str())
         .collect::<Vec<_>>();
     assert!(!labels.contains(&"user_audits"));
+    Ok(())
+}
+
+#[test]
+fn workspace_refresh_storm_coalesces_large_catalog_updates() -> Result<()> {
+    let catalog_calls = Arc::new(AtomicUsize::new(0));
+    let (unblock_catalog_tx, unblock_catalog_rx) = mpsc::channel();
+    let (catalog_wait_tx, catalog_wait_rx) = mpsc::channel();
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(
+            BlockingCatalogDriver::new(
+                vec![
+                    large_catalog_with_marker(24, 32, None),
+                    large_catalog_with_marker(24, 32, Some("stale_refresh_marker")),
+                    large_catalog_with_marker(24, 32, Some("latest_refresh_marker")),
+                ],
+                vec![
+                    preview(&["id", "status"], &[&["5", "initial"]]),
+                    preview(&["id", "status"], &[&["5", "stale"]]),
+                    preview(&["id", "status"], &[&["5", "latest"]]),
+                ],
+                vec![],
+                unblock_catalog_rx,
+            )
+            .with_catalog_call_counter(catalog_calls.clone())
+            .with_catalog_wait_notifier(catalog_wait_tx),
+        ),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 100)?;
+    assert_eq!(workspace.active_preview().rows[0][1], "initial");
+    assert_eq!(workspace.selected_row().label, "table_000");
+
+    workspace.apply_action(WorkspaceAction::Refresh)?;
+    catalog_wait_rx
+        .recv()
+        .expect("the first refresh should reach the blocking catalog load");
+    for _ in 0..7 {
+        workspace.apply_action(WorkspaceAction::Refresh)?;
+    }
+    assert!(workspace.has_pending_tasks());
+
+    unblock_catalog_tx
+        .send(())
+        .expect("refresh worker should still be waiting");
+    drain_until_idle(&mut workspace)?;
+
+    assert_eq!(catalog_calls.load(Ordering::SeqCst), 3);
+    assert_eq!(workspace.selected_row().label, "table_000");
+    assert_eq!(workspace.active_preview().rows[0][1], "latest");
+    let labels = workspace
+        .tree_rows()
+        .iter()
+        .map(|row| row.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(labels.contains(&"latest_refresh_marker"));
+    assert!(!labels.contains(&"stale_refresh_marker"));
     Ok(())
 }
 

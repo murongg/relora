@@ -161,7 +161,9 @@ fn workspace_hot_path_benchmarks_exist() {
     let bench_source = fs::read_to_string(&bench).expect("benchmark should be readable");
     for scenario in [
         "workspace_bootstrap_large_catalog",
+        "workspace_expand_large_catalog_tree",
         "workspace_cancel_inflight_preview",
+        "workspace_refresh_storm_large_catalog",
         "workspace_scroll_wide_preview_columns",
         "workspace_switch_sql_result_sets",
     ] {
@@ -179,6 +181,7 @@ fn tui_render_hot_path_benchmarks_exist() {
 
     let bench_source = fs::read_to_string(&bench).expect("benchmark should be readable");
     for scenario in [
+        "render_workspace_assets_expanded_tree",
         "render_workspace_data_tab_dense_grid",
         "render_workspace_sql_tab_result_grid",
         "render_workspace_row_inspector_long_text",

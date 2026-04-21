@@ -21,6 +21,76 @@ impl DatabaseKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IdentifierQuoteStyle {
+    DoubleQuote,
+    Backtick,
+}
+
+impl IdentifierQuoteStyle {
+    pub fn quote_identifier(self, value: &str) -> String {
+        match self {
+            Self::DoubleQuote => format!("\"{}\"", value.replace('"', "\"\"")),
+            Self::Backtick => format!("`{}`", value.replace('`', "``")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExplainFlavor {
+    Explain,
+    ExplainQueryPlan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriverCapabilities {
+    pub identifier_quote_style: IdentifierQuoteStyle,
+    pub supports_crud_templates: bool,
+    pub supports_staged_crud: bool,
+    pub supports_sql_completion: bool,
+    pub supports_explain: bool,
+    pub supports_explain_analyze: bool,
+    pub supports_returning: bool,
+    pub explain_flavor: ExplainFlavor,
+}
+
+impl DriverCapabilities {
+    pub fn for_kind(kind: DatabaseKind) -> Self {
+        match kind {
+            DatabaseKind::Postgres => Self {
+                identifier_quote_style: IdentifierQuoteStyle::DoubleQuote,
+                supports_crud_templates: true,
+                supports_staged_crud: true,
+                supports_sql_completion: true,
+                supports_explain: true,
+                supports_explain_analyze: true,
+                supports_returning: true,
+                explain_flavor: ExplainFlavor::Explain,
+            },
+            DatabaseKind::MySql => Self {
+                identifier_quote_style: IdentifierQuoteStyle::Backtick,
+                supports_crud_templates: true,
+                supports_staged_crud: true,
+                supports_sql_completion: true,
+                supports_explain: true,
+                supports_explain_analyze: false,
+                supports_returning: false,
+                explain_flavor: ExplainFlavor::Explain,
+            },
+            DatabaseKind::Sqlite => Self {
+                identifier_quote_style: IdentifierQuoteStyle::DoubleQuote,
+                supports_crud_templates: true,
+                supports_staged_crud: true,
+                supports_sql_completion: true,
+                supports_explain: true,
+                supports_explain_analyze: false,
+                supports_returning: false,
+                explain_flavor: ExplainFlavor::ExplainQueryPlan,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum DbObjectKind {
     Table,
@@ -182,6 +252,9 @@ impl SqlExecutionResult {
 
 pub trait DatabaseDriver: Send {
     fn kind(&self) -> DatabaseKind;
+    fn capabilities(&self) -> DriverCapabilities {
+        DriverCapabilities::for_kind(self.kind())
+    }
     fn connection_label(&self) -> &str;
     fn load_catalog(&mut self) -> Result<Catalog>;
     fn load_preview_page(

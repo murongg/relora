@@ -2,7 +2,8 @@ use std::{env, ffi::OsString, path::PathBuf, process::Command};
 
 use anyhow::{Context, Result, bail};
 use relora_core::db::{
-    Catalog, DatabaseDriver, DatabaseKind, DbColumn, DbObjectRef, SqlExecutionResult, TablePreview,
+    Catalog, DatabaseDriver, DatabaseKind, DbColumn, DbObjectRef, DriverCapabilities,
+    SqlExecutionResult, TablePreview,
 };
 use serde::de::DeserializeOwned;
 use url::Url;
@@ -186,15 +187,20 @@ struct ExternalCommandDriver {
     url: String,
     binary: PathBuf,
     connection_label: String,
+    capabilities: DriverCapabilities,
 }
 
 impl ExternalCommandDriver {
     fn new(kind: DatabaseKind, url: &str, binary: PathBuf) -> Self {
+        let capabilities =
+            run_json_command::<DriverCapabilities>(&binary, url, kind, "capabilities", Vec::new())
+                .unwrap_or_else(|_| DriverCapabilities::for_kind(kind));
         Self {
             kind,
             url: url.to_string(),
             binary,
             connection_label: external_connection_label(kind, url),
+            capabilities,
         }
     }
 
@@ -202,43 +208,17 @@ impl ExternalCommandDriver {
     where
         T: DeserializeOwned,
     {
-        let output = Command::new(&self.binary)
-            .arg("--url")
-            .arg(&self.url)
-            .arg(command)
-            .args(args)
-            .output()
-            .with_context(|| {
-                format!(
-                    "failed to run external {} driver at {}",
-                    kind_label(self.kind),
-                    self.binary.display()
-                )
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!(
-                "external {} driver command `{}` failed: {}",
-                kind_label(self.kind),
-                command,
-                stderr.trim()
-            );
-        }
-
-        serde_json::from_slice(&output.stdout).with_context(|| {
-            format!(
-                "external {} driver returned invalid JSON for `{}`",
-                kind_label(self.kind),
-                command
-            )
-        })
+        run_json_command(&self.binary, &self.url, self.kind, command, args)
     }
 }
 
 impl DatabaseDriver for ExternalCommandDriver {
     fn kind(&self) -> DatabaseKind {
         self.kind
+    }
+
+    fn capabilities(&self) -> DriverCapabilities {
+        self.capabilities
     }
 
     fn connection_label(&self) -> &str {
@@ -311,6 +291,49 @@ impl DatabaseDriver for ExternalCommandDriver {
         args.push(sql.into());
         self.run_json("execute", args)
     }
+}
+
+fn run_json_command<T>(
+    binary: &PathBuf,
+    url: &str,
+    kind: DatabaseKind,
+    command: &str,
+    args: Vec<OsString>,
+) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    let output = Command::new(binary)
+        .arg("--url")
+        .arg(url)
+        .arg(command)
+        .args(args)
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to run external {} driver at {}",
+                kind_label(kind),
+                binary.display()
+            )
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "external {} driver command `{}` failed: {}",
+            kind_label(kind),
+            command,
+            stderr.trim()
+        );
+    }
+
+    serde_json::from_slice(&output.stdout).with_context(|| {
+        format!(
+            "external {} driver returned invalid JSON for `{}`",
+            kind_label(kind),
+            command
+        )
+    })
 }
 
 fn external_connection_label(kind: DatabaseKind, url: &str) -> String {

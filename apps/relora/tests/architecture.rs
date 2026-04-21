@@ -3,7 +3,7 @@ use relora_app::{
     syntax::{SqlTokenKind, highlight_sql_line},
     templates::{delete_template, insert_template, select_template, update_template},
 };
-use relora_core::db::{DbColumn, DbObjectKind, DbObjectRef};
+use relora_core::db::{DatabaseKind, DbColumn, DbObjectKind, DbObjectRef, DriverCapabilities};
 use std::fs;
 use std::path::Path;
 
@@ -78,11 +78,12 @@ fn crud_templates_prefer_primary_keys_and_quote_identifiers() {
         ("email", "text", false, false, false),
         ("display_name", "text", true, false, false),
     ]);
+    let capabilities = DriverCapabilities::for_kind(DatabaseKind::Postgres);
 
-    let select_sql = select_template(&target, 50);
-    let insert_sql = insert_template(&target, &columns);
-    let update_sql = update_template(&target, &columns);
-    let delete_sql = delete_template(&target, &columns);
+    let select_sql = select_template(capabilities, &target, 50);
+    let insert_sql = insert_template(capabilities, &target, &columns);
+    let update_sql = update_template(capabilities, &target, &columns);
+    let delete_sql = delete_template(capabilities, &target, &columns);
 
     assert!(select_sql.contains("FROM \"public\".\"users\""));
     assert!(insert_sql.contains("INSERT INTO \"public\".\"users\""));

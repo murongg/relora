@@ -6,7 +6,10 @@ use std::{
 use anyhow::{Result, anyhow};
 use relora_core::{
     app::App as ConnectionApp,
-    db::{DatabaseKind, DbColumn, DbObjectKind, DbObjectRef, SqlExecutionResult, TablePreview},
+    db::{
+        DatabaseKind, DbColumn, DbObjectKind, DbObjectRef, DriverCapabilities, SqlExecutionResult,
+        TablePreview,
+    },
 };
 
 use crate::{
@@ -318,6 +321,7 @@ struct ConnectionSession {
     name: String,
     connection_label: String,
     kind: DatabaseKind,
+    capabilities: DriverCapabilities,
     read_only: bool,
     app: ConnectionApp,
     worker: SessionWorker,
@@ -519,11 +523,13 @@ impl WorkspaceApp {
         let mut sessions = Vec::new();
         for bootstrap in bootstraps {
             let mut driver = bootstrap.driver;
+            let capabilities = driver.capabilities();
             let app = ConnectionApp::bootstrap(driver.as_mut(), preview_limit)?;
             let mut session = ConnectionSession {
                 name: bootstrap.name,
                 connection_label: app.connection_label().to_string(),
                 kind: driver.kind(),
+                capabilities,
                 read_only: false,
                 worker: SessionWorker::spawn(driver),
                 app,
@@ -2089,39 +2095,39 @@ impl WorkspaceApp {
     }
 
     fn refresh_editor_completion(&mut self) {
-        let Some(tab) = self.active_editor_tab() else {
-            self.editor_completion.clear();
-            return;
-        };
-        let Some(prefix) = tab.buffer.completion_prefix() else {
-            self.editor_completion.clear();
-            return;
-        };
-        let connection_index = tab.connection_index;
-        let active_database = tab.database_name.as_deref().or_else(|| {
-            self.sessions
-                .get(connection_index)?
-                .app
-                .selected_database_name()
-        });
-        let objects = self
-            .sessions
-            .get(connection_index)
-            .map(|session| {
-                session
-                    .app
-                    .databases()
-                    .iter()
-                    .filter(|database| {
-                        active_database
-                            .map(|active_database| database.name == active_database)
-                            .unwrap_or(true)
-                    })
-                    .flat_map(|database| database.schemas.iter())
-                    .flat_map(|schema| schema.objects.iter().map(|object| object.name.clone()))
-                    .collect::<Vec<_>>()
+        let Some((connection_index, database_name, prefix)) =
+            self.active_editor_tab().and_then(|tab| {
+                tab.buffer
+                    .completion_prefix()
+                    .map(|prefix| (tab.connection_index, tab.database_name.clone(), prefix))
             })
-            .unwrap_or_default();
+        else {
+            self.editor_completion.clear();
+            return;
+        };
+        let Some(session) = self.sessions.get(connection_index) else {
+            self.editor_completion.clear();
+            return;
+        };
+        if !session.capabilities.supports_sql_completion {
+            self.editor_completion.clear();
+            return;
+        }
+        let active_database = database_name
+            .as_deref()
+            .or_else(|| session.app.selected_database_name());
+        let objects = session
+            .app
+            .databases()
+            .iter()
+            .filter(|database| {
+                active_database
+                    .map(|active_database| database.name == active_database)
+                    .unwrap_or(true)
+            })
+            .flat_map(|database| database.schemas.iter())
+            .flat_map(|schema| schema.objects.iter().map(|object| object.name.clone()))
+            .collect::<Vec<_>>();
         let columns = self.active_preview().columns.clone();
         let items = suggest_sql_completions(&prefix, &objects, &columns);
         self.editor_completion.set_items(items);
@@ -2226,7 +2232,11 @@ impl WorkspaceApp {
             .get(row_index)
             .ok_or_else(|| anyhow!("selected row is no longer available"))?;
         let key_columns = self.selected_key_columns();
-        let clause = where_clause_for_row(&grid.columns, row, &key_columns);
+        let quote_style = self
+            .active_connection_capabilities()
+            .ok_or_else(|| anyhow!("no connection is selected"))?
+            .identifier_quote_style;
+        let clause = where_clause_for_row(quote_style, &grid.columns, row, &key_columns);
         if clause.is_empty() {
             return Err(anyhow!(
                 "could not build a WHERE clause for the selected row"
@@ -2279,10 +2289,17 @@ impl WorkspaceApp {
     fn preview_staged_crud(&mut self) -> Result<()> {
         let edit = self
             .cell_edit
-            .take()
+            .as_ref()
             .ok_or_else(|| anyhow!("cell edit is not open"))?;
+        let capabilities = self.connection_capabilities(edit.connection_index)?;
+        if !capabilities.supports_staged_crud {
+            return Err(anyhow!(
+                "the current connection does not support staged CRUD"
+            ));
+        }
         let key_columns = self.selected_key_columns();
         let sql = staged_update_sql(
+            capabilities,
             &edit.object,
             self.active_grid(),
             edit.row_index,
@@ -2291,6 +2308,10 @@ impl WorkspaceApp {
             &key_columns,
         )
         .ok_or_else(|| anyhow!("could not build staged CRUD SQL"))?;
+        let edit = self
+            .cell_edit
+            .take()
+            .ok_or_else(|| anyhow!("cell edit is not open"))?;
 
         self.open_editor_tab(
             edit.connection_index,
@@ -2584,10 +2605,17 @@ impl WorkspaceApp {
         let connection_index = self
             .selected_connection_index()
             .ok_or_else(|| anyhow!("no connection is selected"))?;
+        let capabilities = self.connection_capabilities(connection_index)?;
         let database_name = self.selected_database_name().map(str::to_owned);
         let sql = self
             .selected_object()
-            .map(|object| select_template(object, self.selected_preview_limit().unwrap_or(100)))
+            .map(|object| {
+                select_template(
+                    capabilities,
+                    object,
+                    self.selected_preview_limit().unwrap_or(100),
+                )
+            })
             .unwrap_or_else(|| "SELECT 1;".to_string());
         let title = self
             .selected_object()
@@ -2604,7 +2632,11 @@ impl WorkspaceApp {
         let connection_index = self
             .selected_connection_index()
             .ok_or_else(|| anyhow!("no connection is selected"))?;
-        let sql = select_template(&object, self.selected_preview_limit().unwrap_or(100));
+        let sql = select_template(
+            self.connection_capabilities(connection_index)?,
+            &object,
+            self.selected_preview_limit().unwrap_or(100),
+        );
         self.open_editor_tab(
             connection_index,
             Some(object.database.clone()),
@@ -2653,7 +2685,11 @@ impl WorkspaceApp {
         if statement.trim().is_empty() {
             return Err(anyhow!("current SQL statement is empty"));
         }
-        let sql = explain_sql(&statement, analyze);
+        let sql = explain_sql(
+            self.connection_capabilities(connection_index)?,
+            &statement,
+            analyze,
+        )?;
         let status = if analyze {
             "Running EXPLAIN ANALYZE..."
         } else {
@@ -3012,6 +3048,19 @@ impl WorkspaceApp {
         self.sessions.get(index)
     }
 
+    fn connection_capabilities(&self, connection_index: usize) -> Result<DriverCapabilities> {
+        self.sessions
+            .get(connection_index)
+            .map(|session| session.capabilities)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))
+    }
+
+    fn active_connection_capabilities(&self) -> Option<DriverCapabilities> {
+        self.active_editor_connection_index()
+            .or_else(|| self.selected_connection_index())
+            .and_then(|index| self.sessions.get(index).map(|session| session.capabilities))
+    }
+
     fn selected_preview_limit(&self) -> Option<usize> {
         let session = self.selected_session()?;
         Some(session.app.preview_limit())
@@ -3260,6 +3309,11 @@ impl WorkspaceApp {
             .sessions
             .get_mut(connection_index)
             .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        if !session.capabilities.supports_crud_templates {
+            return Err(anyhow!(
+                "the current connection does not support CRUD templates"
+            ));
+        }
 
         if let Some(previous) = &session.pending.template_request {
             session.worker.cancel_requests(vec![previous.request_id])?;
@@ -3488,7 +3542,12 @@ impl WorkspaceApp {
 
                 match result {
                     Ok(columns) => {
-                        let sql = build_template_sql(kind, &object, &columns);
+                        let sql = build_template_sql(
+                            self.connection_capabilities(session_index)?,
+                            kind,
+                            &object,
+                            &columns,
+                        );
                         self.open_editor_tab(
                             session_index,
                             Some(object.database.clone()),
@@ -4417,11 +4476,16 @@ fn sql_preview(sql: &str) -> String {
     preview
 }
 
-fn build_template_sql(kind: TemplateKind, object: &DbObjectRef, columns: &[DbColumn]) -> String {
+fn build_template_sql(
+    capabilities: DriverCapabilities,
+    kind: TemplateKind,
+    object: &DbObjectRef,
+    columns: &[DbColumn],
+) -> String {
     match kind {
-        TemplateKind::Insert => insert_template(object, columns),
-        TemplateKind::Update => update_template(object, columns),
-        TemplateKind::Delete => delete_template(object, columns),
+        TemplateKind::Insert => insert_template(capabilities, object, columns),
+        TemplateKind::Update => update_template(capabilities, object, columns),
+        TemplateKind::Delete => delete_template(capabilities, object, columns),
     }
 }
 

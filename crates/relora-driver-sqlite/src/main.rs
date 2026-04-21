@@ -21,6 +21,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum DriverCommand {
+    Capabilities,
     Catalog,
     Preview {
         #[arg(long = "object", value_parser = parse_object)]
@@ -55,6 +56,9 @@ fn main() -> Result<()> {
     let mut output = stdout.lock();
 
     match cli.command {
+        DriverCommand::Capabilities => {
+            serde_json::to_writer(&mut output, &driver.capabilities())?;
+        }
         DriverCommand::Catalog => serde_json::to_writer(&mut output, &driver.load_catalog()?)?,
         DriverCommand::Preview {
             object,

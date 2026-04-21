@@ -225,11 +225,10 @@ fn drain_until_sql_results(app: &mut WorkspaceApp) -> Result<()> {
 fn drain_until_structure_loaded(app: &mut WorkspaceApp) -> Result<()> {
     for _ in 0..20 {
         app.drain_background()?;
-        if let Some(structure) = app.view().structure
-            && !structure.loading
-            && !structure.columns.is_empty()
-        {
-            return Ok(());
+        if let Some(structure) = app.view().structure {
+            if !structure.loading && !structure.columns.is_empty() {
+                return Ok(());
+            }
         }
         thread::sleep(Duration::from_millis(10));
     }

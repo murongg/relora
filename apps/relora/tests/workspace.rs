@@ -803,6 +803,64 @@ fn workspace_builds_insert_update_and_delete_templates_for_selected_table() -> R
 }
 
 #[test]
+fn workspace_builds_mysql_templates_without_returning() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "mysql".to_string(),
+        driver: Box::new(
+            MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+                vec![
+                    columns(&[
+                        ("id", "integer", false, true, true),
+                        ("email", "text", false, false, false),
+                        ("display_name", "text", true, false, false),
+                    ]),
+                    columns(&[
+                        ("id", "integer", false, true, true),
+                        ("email", "text", false, false, false),
+                        ("display_name", "text", true, false, false),
+                    ]),
+                    columns(&[
+                        ("id", "integer", false, true, true),
+                        ("email", "text", false, false, false),
+                        ("display_name", "text", true, false, false),
+                    ]),
+                ],
+                vec![],
+            )
+            .with_kind(DatabaseKind::MySql),
+        ),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::OpenInsertTemplate)?;
+    drain_until_idle(&mut workspace)?;
+    let insert = workspace.editor_snapshot().expect("editor should be open");
+    assert!(insert.sql.contains("INSERT INTO `public`.`users`"));
+    assert!(!insert.sql.contains("RETURNING *;"));
+
+    workspace.apply_action(WorkspaceAction::OpenUpdateTemplate)?;
+    drain_until_idle(&mut workspace)?;
+    let update = workspace
+        .editor_snapshot()
+        .expect("editor should remain open");
+    assert!(update.sql.contains("UPDATE `public`.`users`"));
+    assert!(update.sql.contains("WHERE `id` ="));
+    assert!(!update.sql.contains("RETURNING *;"));
+
+    workspace.apply_action(WorkspaceAction::OpenDeleteTemplate)?;
+    drain_until_idle(&mut workspace)?;
+    let delete = workspace
+        .editor_snapshot()
+        .expect("editor should remain open");
+    assert!(delete.sql.contains("DELETE FROM `public`.`users`"));
+    assert!(delete.sql.contains("WHERE `id` ="));
+    assert!(!delete.sql.contains("RETURNING *;"));
+    Ok(())
+}
+
+#[test]
 fn workspace_executes_sql_from_editor_and_shows_query_results() -> Result<()> {
     let bootstraps = vec![ConnectionBootstrap {
         name: "pg".to_string(),
@@ -1286,6 +1344,48 @@ fn workspace_explains_the_current_sql_statement() -> Result<()> {
 }
 
 #[test]
+fn workspace_uses_sqlite_query_plan_and_blocks_explain_analyze() -> Result<()> {
+    let executed_sql = Arc::new(Mutex::new(Vec::new()));
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "sqlite".to_string(),
+        driver: Box::new(
+            MockDriver::new(
+                vec![catalog("main", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+                vec![],
+                vec![query_batch(vec![query(
+                    &["QUERY PLAN"],
+                    &[&["SCAN users"]],
+                )])],
+            )
+            .with_kind(DatabaseKind::Sqlite)
+            .with_sql_recorder(executed_sql.clone()),
+        ),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::OpenSqlEditor)?;
+    workspace.set_editor_sql("select * from users;")?;
+    workspace.apply_action(WorkspaceAction::ExplainCurrentStatement)?;
+    drain_until_idle(&mut workspace)?;
+    workspace.apply_action(WorkspaceAction::ExplainAnalyzeCurrentStatement)?;
+
+    let recorded = executed_sql
+        .lock()
+        .expect("sql recorder lock should be available");
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0], "EXPLAIN QUERY PLAN select * from users;");
+    drop(recorded);
+    assert!(
+        workspace
+            .editor_status()
+            .expect("sqlite explain analyze should set an editor status")
+            .contains("EXPLAIN ANALYZE")
+    );
+    Ok(())
+}
+
+#[test]
 fn workspace_exposes_right_pane_tabs_and_opens_sql_editor_as_a_tab() -> Result<()> {
     let bootstraps = vec![ConnectionBootstrap {
         name: "pg".to_string(),
@@ -1502,6 +1602,36 @@ fn workspace_copies_current_cell_row_and_where_clause() -> Result<()> {
 }
 
 #[test]
+fn workspace_copies_mysql_where_clause_with_backticks() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "mysql".to_string(),
+        driver: Box::new(
+            MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(
+                    &["id", "email"],
+                    &[&["1", "alice@example.com"], &["2", "bob's@example.com"]],
+                )],
+                vec![],
+                vec![],
+            )
+            .with_kind(DatabaseKind::MySql),
+        ),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::FocusDataGrid)?;
+    workspace.apply_action(WorkspaceAction::ScrollDataGridDown)?;
+    workspace.apply_action(WorkspaceAction::CopyCurrentWhereClause)?;
+
+    assert_eq!(
+        workspace.last_copied_text(),
+        Some("`id` = '2' AND `email` = 'bob''s@example.com'")
+    );
+    Ok(())
+}
+
+#[test]
 fn workspace_stages_cell_update_preview_sql_then_commits_transaction() -> Result<()> {
     let executed_sql = Arc::new(Mutex::new(Vec::new()));
     let bootstraps = vec![ConnectionBootstrap {
@@ -1553,6 +1683,47 @@ fn workspace_stages_cell_update_preview_sql_then_commits_transaction() -> Result
     assert!(recorded[0].contains("BEGIN;"));
     assert!(recorded[0].contains("COMMIT;"));
     assert!(recorded[0].contains("\"email\" = 'new@example.com'"));
+    Ok(())
+}
+
+#[test]
+fn workspace_stages_mysql_cell_update_without_returning() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "mysql".to_string(),
+        driver: Box::new(
+            MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id", "email"], &[&["1", "alice@example.com"]])],
+                vec![],
+                vec![],
+            )
+            .with_kind(DatabaseKind::MySql),
+        ),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::FocusDataGrid)?;
+    workspace.apply_action(WorkspaceAction::ScrollDataGridRight)?;
+    workspace.apply_action(WorkspaceAction::StartCellEdit)?;
+    workspace.clear_cell_edit_input()?;
+    for ch in "new@example.com".chars() {
+        workspace.insert_cell_edit_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::PreviewStagedCrud)?;
+
+    let staged = workspace
+        .view()
+        .staged_crud
+        .expect("staged CRUD preview should be available");
+    assert!(staged.preview_sql.contains("UPDATE `public`.`users`"));
+    assert!(
+        staged
+            .preview_sql
+            .contains("SET `email` = 'new@example.com'")
+    );
+    assert!(staged.preview_sql.contains("SELECT *"));
+    assert!(staged.preview_sql.contains("WHERE `id` = '1'"));
+    assert!(!staged.preview_sql.contains("RETURNING *;"));
     Ok(())
 }
 

@@ -11,3 +11,10 @@ description = "Application state and workspace logic for Relora."
 [dependencies]
 anyhow.workspace = true
 relora-core = { path = "../relora-core" }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "workspace_hot_paths"
+harness = false

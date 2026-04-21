@@ -252,6 +252,11 @@ pub fn run(config: AppConfig) -> Result<()> {
     run_result
 }
 
+#[doc(hidden)]
+pub fn render_workspace_for_benchmark(frame: &mut Frame<'_>, app: &WorkspaceApp) {
+    draw_workspace(frame, app);
+}
+
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut AppShell,

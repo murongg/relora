@@ -132,6 +132,8 @@ Relora 当前支持：
 - MySQL / MariaDB
 - SQLite
 
+更细的支持状态和待对齐项见 [docs/feature-parity.md](docs/feature-parity.md)。
+
 数据库能力通过 sidecar binary 提供：
 
 - `relora-driver-postgres`
@@ -146,6 +148,29 @@ Relora 当前支持：
 - 行预览、复制和快速过滤
 - PostgreSQL `EXPLAIN` / `EXPLAIN ANALYZE`
 - staged CRUD，提交前先预览 SQL
+
+## 性能基线
+
+Relora 现在带有一套基于 `criterion` 的性能基准，覆盖工作区状态热路径和 TUI 渲染热路径。当前在维护者机器上通过 `--quick` 得到的基线大致是：
+
+| Benchmark | 基线 |
+| --- | --- |
+| `workspace_bootstrap_large_catalog` | `~411 µs` |
+| `workspace_cancel_inflight_preview` | `~11.6 µs` |
+| `workspace_scroll_wide_preview_columns` | `~177 µs` |
+| `workspace_switch_sql_result_sets` | `~491 µs` |
+| `render_workspace_data_tab_dense_grid` | `~1.74 ms` |
+| `render_workspace_sql_tab_result_grid` | `~1.36 ms` |
+| `render_workspace_row_inspector_long_text` | `~528 µs` |
+
+本地运行方式：
+
+```bash
+cargo bench -p relora-app --bench workspace_hot_paths -- --quick
+cargo bench -p relora --bench tui_render_hot_paths -- --quick
+```
+
+这些数值主要用于后续回归对比，不代表所有机器上的固定性能承诺。
 
 ## 快捷键
 

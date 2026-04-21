@@ -112,6 +112,44 @@ fn tui_runtime_is_split_into_modules() {
 }
 
 #[test]
+fn workspace_hot_path_benchmarks_exist() {
+    let bench = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../crates/relora-app/benches/workspace_hot_paths.rs");
+    assert!(bench.exists(), "expected {:?} to exist", bench);
+
+    let bench_source = fs::read_to_string(&bench).expect("benchmark should be readable");
+    for scenario in [
+        "workspace_bootstrap_large_catalog",
+        "workspace_cancel_inflight_preview",
+        "workspace_scroll_wide_preview_columns",
+        "workspace_switch_sql_result_sets",
+    ] {
+        assert!(
+            bench_source.contains(scenario),
+            "benchmark should define scenario {scenario}"
+        );
+    }
+}
+
+#[test]
+fn tui_render_hot_path_benchmarks_exist() {
+    let bench = Path::new(env!("CARGO_MANIFEST_DIR")).join("benches/tui_render_hot_paths.rs");
+    assert!(bench.exists(), "expected {:?} to exist", bench);
+
+    let bench_source = fs::read_to_string(&bench).expect("benchmark should be readable");
+    for scenario in [
+        "render_workspace_data_tab_dense_grid",
+        "render_workspace_sql_tab_result_grid",
+        "render_workspace_row_inspector_long_text",
+    ] {
+        assert!(
+            bench_source.contains(scenario),
+            "benchmark should define scenario {scenario}"
+        );
+    }
+}
+
+#[test]
 fn tui_layout_metrics_are_defined_in_the_metrics_module() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tui");
     let metrics = root.join("metrics.rs");

@@ -132,6 +132,8 @@ Relora currently supports:
 - MySQL / MariaDB
 - SQLite
 
+Detailed support status and parity gaps live in [docs/feature-parity.md](docs/feature-parity.md).
+
 Database support is shipped through sidecar binaries:
 
 - `relora-driver-postgres`
@@ -146,6 +148,29 @@ Database support is shipped through sidecar binaries:
 - row preview, copy flows, and quick filters
 - PostgreSQL `EXPLAIN` and `EXPLAIN ANALYZE`
 - staged CRUD with SQL preview before commit
+
+## Performance Baseline
+
+Relora now ships with `criterion` benchmarks for the hottest workspace and rendering paths. Current `--quick` baselines on the maintainer machine are:
+
+| Benchmark | Baseline |
+| --- | --- |
+| `workspace_bootstrap_large_catalog` | `~411 µs` |
+| `workspace_cancel_inflight_preview` | `~11.6 µs` |
+| `workspace_scroll_wide_preview_columns` | `~177 µs` |
+| `workspace_switch_sql_result_sets` | `~491 µs` |
+| `render_workspace_data_tab_dense_grid` | `~1.74 ms` |
+| `render_workspace_sql_tab_result_grid` | `~1.36 ms` |
+| `render_workspace_row_inspector_long_text` | `~528 µs` |
+
+Run them locally with:
+
+```bash
+cargo bench -p relora-app --bench workspace_hot_paths -- --quick
+cargo bench -p relora --bench tui_render_hot_paths -- --quick
+```
+
+These numbers are intended as a regression baseline, not a hard performance guarantee across machines.
 
 ## Keybindings
 

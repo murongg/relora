@@ -1851,7 +1851,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "relora"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1868,7 +1868,7 @@ dependencies = [
 
 [[package]]
 name = "relora-app"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1877,7 +1877,7 @@ dependencies = [
 
 [[package]]
 name = "relora-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "serde",
@@ -1886,7 +1886,7 @@ dependencies = [
 
 [[package]]
 name = "relora-driver-mysql"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1898,7 +1898,7 @@ dependencies = [
 
 [[package]]
 name = "relora-driver-postgres"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1910,7 +1910,7 @@ dependencies = [
 
 [[package]]
 name = "relora-driver-sqlite"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",

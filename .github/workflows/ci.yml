@@ -8,6 +8,7 @@ on:
 
 jobs:
   checks:
+    name: Linux Checks
     runs-on: ubuntu-latest
 
     steps:
@@ -34,3 +35,35 @@ jobs:
 
       - name: Validate source build smoke test script
         run: sh -n scripts/smoke-test-source-build.sh
+
+  cross-platform-smoke:
+    name: Smoke (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            label: ubuntu
+          - runner: macos-14
+            label: macos
+          - runner: windows-latest
+            label: windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Run non-interactive runtime diagnostic
+        run: cargo run -p relora -- paths --json

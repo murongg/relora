@@ -210,6 +210,21 @@ fn query_batch(items: Vec<Vec<SqlExecutionResult>>) -> Vec<SqlExecutionResult> {
     items.into_iter().flatten().collect()
 }
 
+#[test]
+fn mysql_object_scope_label_collapses_duplicate_database_schema() {
+    let object = DbObjectRef {
+        database: "relora_demo".to_string(),
+        schema: "relora_demo".to_string(),
+        name: "release_runs".to_string(),
+        kind: DbObjectKind::Table,
+    };
+
+    assert_eq!(
+        render::object_scope_label(Some(DatabaseKind::MySql), &object),
+        "relora_demo.release_runs"
+    );
+}
+
 fn drain_until_result_visible(app: &mut WorkspaceApp) -> Result<()> {
     for _ in 0..20 {
         app.drain_background()?;

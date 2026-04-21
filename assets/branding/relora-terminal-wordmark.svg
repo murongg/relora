@@ -1,0 +1,70 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="660"
+  height="160"
+  viewBox="0 0 25 6"
+  preserveAspectRatio="xMinYMid meet"
+  fill="none"
+  role="img"
+  aria-labelledby="relora-wordmark-title relora-wordmark-desc"
+  shape-rendering="crispEdges"
+>
+  <title id="relora-wordmark-title">Relora terminal wordmark</title>
+  <desc id="relora-wordmark-desc">
+    Exact SVG reconstruction of the two-line terminal pixel logo used by Relora.
+  </desc>
+
+  <defs>
+    <g id="cell-full">
+      <rect x="0" y="0" width="1" height="2" />
+    </g>
+    <g id="cell-top">
+      <rect x="0" y="0" width="1" height="1" />
+    </g>
+    <g id="cell-bottom">
+      <rect x="0" y="1" width="1" height="1" />
+    </g>
+  </defs>
+
+  <g transform="translate(1 1)">
+    <g fill="#F4F8FF">
+      <use href="#cell-full" x="0" />
+      <use href="#cell-top" x="1" />
+      <use href="#cell-full" x="2" />
+      <use href="#cell-full" x="4" />
+      <use href="#cell-top" x="5" />
+      <use href="#cell-top" x="6" />
+      <use href="#cell-full" x="8" />
+      <use href="#cell-full" x="12" />
+      <use href="#cell-top" x="13" />
+      <use href="#cell-full" x="14" />
+      <use href="#cell-full" x="16" />
+      <use href="#cell-top" x="17" />
+      <use href="#cell-full" x="18" />
+      <use href="#cell-bottom" x="20" />
+      <use href="#cell-top" x="21" />
+      <use href="#cell-full" x="22" />
+    </g>
+
+    <g transform="translate(0 2)" fill="#58B9DE">
+      <use href="#cell-full" x="0" />
+      <use href="#cell-top" x="1" />
+      <use href="#cell-bottom" x="2" />
+      <use href="#cell-full" x="4" />
+      <use href="#cell-full" x="5" />
+      <use href="#cell-bottom" x="6" />
+      <use href="#cell-full" x="8" />
+      <use href="#cell-bottom" x="9" />
+      <use href="#cell-bottom" x="10" />
+      <use href="#cell-full" x="12" />
+      <use href="#cell-bottom" x="13" />
+      <use href="#cell-full" x="14" />
+      <use href="#cell-full" x="16" />
+      <use href="#cell-top" x="17" />
+      <use href="#cell-bottom" x="18" />
+      <use href="#cell-full" x="20" />
+      <use href="#cell-top" x="21" />
+      <use href="#cell-full" x="22" />
+    </g>
+  </g>
+</svg>

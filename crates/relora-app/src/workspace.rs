@@ -3999,26 +3999,37 @@ fn build_rows_for_session(connection_index: usize, session: &ConnectionSession) 
         }
 
         for schema in &database.schemas {
-            let schema_expanded = session
-                .expanded_schemas
-                .contains(&(database.name.clone(), schema.name.clone()));
-            rows.push(TreeEntry {
-                row: TreeRow::new(
-                    schema.name.clone(),
-                    database_depth + 1,
-                    true,
-                    schema_expanded,
-                    Some(schema.objects.len().to_string()),
-                ),
-                key: TreeNodeKey::Schema {
-                    connection: connection_index,
-                    database: database.name.clone(),
-                    schema: schema.name.clone(),
-                },
-            });
+            let collapse_schema =
+                session.kind == DatabaseKind::MySql && schema.name == database.name;
+            let group_depth = if collapse_schema {
+                database_depth + 1
+            } else {
+                database_depth + 2
+            };
+            let object_depth = group_depth + 1;
 
-            if !schema_expanded {
-                continue;
+            if !collapse_schema {
+                let schema_expanded = session
+                    .expanded_schemas
+                    .contains(&(database.name.clone(), schema.name.clone()));
+                rows.push(TreeEntry {
+                    row: TreeRow::new(
+                        schema.name.clone(),
+                        database_depth + 1,
+                        true,
+                        schema_expanded,
+                        Some(schema.objects.len().to_string()),
+                    ),
+                    key: TreeNodeKey::Schema {
+                        connection: connection_index,
+                        database: database.name.clone(),
+                        schema: schema.name.clone(),
+                    },
+                });
+
+                if !schema_expanded {
+                    continue;
+                }
             }
 
             for kind in DbObjectKind::ordered() {
@@ -4035,7 +4046,7 @@ fn build_rows_for_session(connection_index: usize, session: &ConnectionSession) 
                 rows.push(TreeEntry {
                     row: TreeRow::new(
                         kind.group_label(),
-                        database_depth + 2,
+                        group_depth,
                         true,
                         group_expanded,
                         Some(objects.len().to_string()),
@@ -4056,7 +4067,7 @@ fn build_rows_for_session(connection_index: usize, session: &ConnectionSession) 
                     rows.push(TreeEntry {
                         row: TreeRow::new(
                             object.name.clone(),
-                            database_depth + 3,
+                            object_depth,
                             false,
                             false,
                             Some(kind.label().to_string()),

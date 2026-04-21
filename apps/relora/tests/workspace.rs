@@ -15,6 +15,7 @@ use relora_core::db::{
 
 #[derive(Debug)]
 struct MockDriver {
+    kind: DatabaseKind,
     catalogs: VecDeque<Catalog>,
     previews: VecDeque<TablePreview>,
     filtered_previews: VecDeque<TablePreview>,
@@ -31,6 +32,7 @@ impl MockDriver {
         executions: Vec<Vec<SqlExecutionResult>>,
     ) -> Self {
         Self {
+            kind: DatabaseKind::Postgres,
             catalogs: VecDeque::from(catalogs),
             previews: VecDeque::from(previews),
             filtered_previews: VecDeque::new(),
@@ -42,6 +44,11 @@ impl MockDriver {
 
     fn with_filtered_previews(mut self, previews: Vec<TablePreview>) -> Self {
         self.filtered_previews = VecDeque::from(previews);
+        self
+    }
+
+    fn with_kind(mut self, kind: DatabaseKind) -> Self {
+        self.kind = kind;
         self
     }
 
@@ -76,7 +83,7 @@ impl BlockingPreviewDriver {
 
 impl DatabaseDriver for MockDriver {
     fn kind(&self) -> DatabaseKind {
-        DatabaseKind::Postgres
+        self.kind
     }
 
     fn connection_label(&self) -> &str {
@@ -427,6 +434,67 @@ fn workspace_tree_shows_database_nodes_for_multi_database_connections() -> Resul
     assert!(labels.contains(&"app"));
     assert!(labels.contains(&"analytics"));
     assert!(labels.contains(&"user_sessions"));
+    Ok(())
+}
+
+#[test]
+fn workspace_tree_collapses_mysql_database_schema_duplicate_level() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "mysql".to_string(),
+        driver: Box::new(
+            MockDriver::new(
+                vec![Catalog {
+                    databases: vec![
+                        DatabaseEntry {
+                            name: "relora_demo".to_string(),
+                            schemas: vec![SchemaEntry {
+                                database: "relora_demo".to_string(),
+                                name: "relora_demo".to_string(),
+                                objects: vec![DbObjectRef {
+                                    database: "relora_demo".to_string(),
+                                    schema: "relora_demo".to_string(),
+                                    name: "release_runs".to_string(),
+                                    kind: DbObjectKind::Table,
+                                }],
+                            }],
+                        },
+                        DatabaseEntry {
+                            name: "poker".to_string(),
+                            schemas: vec![SchemaEntry {
+                                database: "poker".to_string(),
+                                name: "poker".to_string(),
+                                objects: vec![DbObjectRef {
+                                    database: "poker".to_string(),
+                                    schema: "poker".to_string(),
+                                    name: "hands".to_string(),
+                                    kind: DbObjectKind::Table,
+                                }],
+                            }],
+                        },
+                    ],
+                }],
+                vec![preview(&["id"], &[&["1"]])],
+                vec![],
+                vec![],
+            )
+            .with_kind(DatabaseKind::MySql),
+        ),
+    }];
+
+    let workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    let rows = workspace.tree_rows();
+    let relora_demo_rows = rows
+        .iter()
+        .filter(|row| row.label == "relora_demo")
+        .collect::<Vec<_>>();
+    let labels = rows
+        .iter()
+        .map(|row| row.label.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(relora_demo_rows.len(), 1);
+    assert!(labels.contains(&"Tables"));
+    assert!(labels.contains(&"release_runs"));
     Ok(())
 }
 

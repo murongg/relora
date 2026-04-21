@@ -145,15 +145,29 @@ fn find_driver_binary(binary: &str) -> Option<PathBuf> {
         }
     }
 
-    env::var_os("PATH")
-        .and_then(|path| {
-            env::split_paths(&path)
-                .map(|dir| dir.join(binary))
-                .find(|candidate| candidate.is_file())
-        })
-        .or_else(|| bundled_driver(binary))
-        .or_else(|| cargo_bin_driver(binary))
-        .or_else(|| workspace_target_driver(binary))
+    preferred_driver_candidate(
+        bundled_driver(binary),
+        workspace_target_driver(binary),
+        path_driver(binary),
+        cargo_bin_driver(binary),
+    )
+}
+
+fn preferred_driver_candidate(
+    bundled: Option<PathBuf>,
+    workspace: Option<PathBuf>,
+    path: Option<PathBuf>,
+    cargo_bin: Option<PathBuf>,
+) -> Option<PathBuf> {
+    bundled.or(workspace).or(path).or(cargo_bin)
+}
+
+fn path_driver(binary: &str) -> Option<PathBuf> {
+    env::var_os("PATH").and_then(|path| {
+        env::split_paths(&path)
+            .map(|dir| dir.join(binary))
+            .find(|candidate| candidate.is_file())
+    })
 }
 
 pub fn driver_override_env_var(binary: &str) -> String {
@@ -448,6 +462,38 @@ mod tests {
         assert_eq!(
             driver_override_env_var("relora-driver-mysql"),
             "RELORA_MYSQL_DRIVER"
+        );
+    }
+
+    #[test]
+    fn driver_resolution_prefers_bundled_and_workspace_sidecars_before_global_bins() {
+        let bundled = Some(PathBuf::from("/bundle/relora-driver-mysql"));
+        let workspace = Some(PathBuf::from("/workspace/target/debug/relora-driver-mysql"));
+        let path = Some(PathBuf::from("/usr/local/bin/relora-driver-mysql"));
+        let cargo_bin = Some(PathBuf::from(
+            "/Users/example/.cargo/bin/relora-driver-mysql",
+        ));
+
+        assert_eq!(
+            preferred_driver_candidate(
+                bundled.clone(),
+                workspace.clone(),
+                path.clone(),
+                cargo_bin.clone()
+            ),
+            bundled
+        );
+        assert_eq!(
+            preferred_driver_candidate(None, workspace.clone(), path.clone(), cargo_bin.clone()),
+            workspace
+        );
+        assert_eq!(
+            preferred_driver_candidate(None, None, path.clone(), cargo_bin.clone()),
+            path
+        );
+        assert_eq!(
+            preferred_driver_candidate(None, None, None, cargo_bin.clone()),
+            cargo_bin
         );
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use relora_core::db::DbObjectRef;
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &AppShell) {
     match app {
@@ -597,7 +598,7 @@ pub(super) fn draw_header(
     };
 
     let scope_label = if let Some(object) = view.selected_object {
-        object.database_qualified_name()
+        object_scope_label(view.selected_connection_kind, object)
     } else if let (Some(database), Some(schema)) =
         (view.selected_database_name, view.selected_schema_name)
     {
@@ -882,7 +883,7 @@ pub(super) fn draw_summary(frame: &mut Frame<'_>, area: Rect, view: WorkspaceVie
     if let Some(object) = view.selected_object {
         lines.push(Line::from(format!(
             "Object: {} ({})",
-            object.database_qualified_name(),
+            object_scope_label(view.selected_connection_kind, object),
             object.kind.label()
         )));
     } else if let Some(schema_name) = view.selected_schema_name {
@@ -1513,5 +1514,13 @@ pub(super) fn database_kind_label(kind: DatabaseKind) -> &'static str {
         DatabaseKind::Postgres => DATABASE_KIND_POSTGRES,
         DatabaseKind::MySql => DATABASE_KIND_MYSQL,
         DatabaseKind::Sqlite => DATABASE_KIND_SQLITE,
+    }
+}
+
+pub(super) fn object_scope_label(kind: Option<DatabaseKind>, object: &DbObjectRef) -> String {
+    if kind == Some(DatabaseKind::MySql) && object.database == object.schema {
+        format!("{}.{}", object.database, object.name)
+    } else {
+        object.database_qualified_name()
     }
 }

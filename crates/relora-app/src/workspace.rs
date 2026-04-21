@@ -67,6 +67,8 @@ pub enum WorkspaceAction {
     ClearFrozenGridColumns,
     OpenCommandPalette,
     CloseCommandPalette,
+    OpenHelpOverlay,
+    CloseHelpOverlay,
     NextCommandPaletteItem,
     PreviousCommandPaletteItem,
     ExecuteCommandPaletteSelection,
@@ -292,6 +294,7 @@ pub struct WorkspaceApp {
     grid_scroll_offset: usize,
     grid_column_offset: usize,
     command_palette: Option<CommandPaletteState>,
+    help_overlay_visible: bool,
     editor_completion: EditorCompletionState,
     sql_history: SqlHistoryState,
     data_filter: Option<DataFilterState>,
@@ -527,6 +530,7 @@ impl WorkspaceApp {
             grid_scroll_offset: 0,
             grid_column_offset: 0,
             command_palette: None,
+            help_overlay_visible: false,
             editor_completion: EditorCompletionState::default(),
             sql_history: SqlHistoryState::default(),
             data_filter: None,
@@ -577,6 +581,8 @@ impl WorkspaceApp {
                 | WorkspaceAction::ClearFrozenGridColumns
                 | WorkspaceAction::OpenCommandPalette
                 | WorkspaceAction::CloseCommandPalette
+                | WorkspaceAction::OpenHelpOverlay
+                | WorkspaceAction::CloseHelpOverlay
                 | WorkspaceAction::NextCommandPaletteItem
                 | WorkspaceAction::PreviousCommandPaletteItem
                 | WorkspaceAction::OpenSqlHistory
@@ -657,6 +663,8 @@ impl WorkspaceApp {
             }
             WorkspaceAction::OpenCommandPalette => self.open_command_palette(),
             WorkspaceAction::CloseCommandPalette => self.close_command_palette(),
+            WorkspaceAction::OpenHelpOverlay => self.open_help_overlay(),
+            WorkspaceAction::CloseHelpOverlay => self.close_help_overlay(),
             WorkspaceAction::NextCommandPaletteItem => self.move_command_palette_selection(1),
             WorkspaceAction::PreviousCommandPaletteItem => self.move_command_palette_selection(-1),
             WorkspaceAction::ExecuteCommandPaletteSelection => {
@@ -867,6 +875,10 @@ impl WorkspaceApp {
         self.delete_confirmation.is_some()
     }
 
+    pub fn help_overlay_open(&self) -> bool {
+        self.help_overlay_visible
+    }
+
     pub fn view(&self) -> WorkspaceView<'_> {
         let selected_connection_index = self.selected_connection_index();
         let selected_session = selected_connection_index.and_then(|index| self.sessions.get(index));
@@ -905,6 +917,7 @@ impl WorkspaceApp {
             data_filter: self.data_filter_view(),
             cell_edit: self.cell_edit_view(),
             row_inspector: self.row_inspector_view(),
+            help_overlay_visible: self.help_overlay_visible,
             editor: self.editor.as_ref().map(SqlEditorState::view),
             editor_completion: self.editor_completion.view(),
             structure: self.structure_view(),
@@ -1038,6 +1051,14 @@ impl WorkspaceApp {
 
     pub fn command_palette_open(&self) -> bool {
         self.command_palette.is_some()
+    }
+
+    fn open_help_overlay(&mut self) {
+        self.help_overlay_visible = true;
+    }
+
+    fn close_help_overlay(&mut self) {
+        self.help_overlay_visible = false;
     }
 
     pub fn command_palette_items(&self) -> Option<&[CommandPaletteItemView]> {

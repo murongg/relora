@@ -1,6 +1,8 @@
 pub(super) const KEY_INTERRUPT: char = 'c';
 pub(super) const KEY_COMMAND_PALETTE: char = 'p';
 pub(super) const KEY_SQL_HISTORY: char = 'r';
+pub(super) const KEY_HELP: char = '?';
+pub(super) const KEY_HELP_FULLWIDTH: char = '？';
 pub(super) const KEY_CONFIRM_YES_LOWER: char = 'y';
 pub(super) const KEY_CONFIRM_YES_UPPER: char = 'Y';
 pub(super) const KEY_CONFIRM_NO_LOWER: char = 'n';
@@ -65,6 +67,7 @@ pub(super) const KEY_ALT_TAB_STRUCTURE: char = '3';
 pub(super) const FKEY_TAB_DATA: u8 = 2;
 pub(super) const FKEY_TAB_SQL: u8 = 3;
 pub(super) const FKEY_TAB_STRUCTURE: u8 = 4;
+pub(super) const FKEY_HELP: u8 = 1;
 pub(super) const FKEY_EDITOR_EXECUTE: u8 = 5;
 pub(super) const FKEY_EDITOR_PREVIOUS_TAB: u8 = 6;
 pub(super) const FKEY_EDITOR_NEXT_TAB: u8 = 7;
@@ -90,6 +93,8 @@ pub(super) const DELETE_OPERATION_HELP: &str = "Press y to execute, n or Esc to 
 
 pub(super) const FOOTER_COMMAND_HELP: &str =
     "Command: type to filter, Up/Down select, Enter run, Esc close";
+pub(super) const FOOTER_KEYBOARD_HELP: &str =
+    "Keyboard help: Esc/Enter/?/F1 close, then continue working in the same pane";
 pub(super) const FOOTER_SQL_HISTORY_HELP: &str =
     "SQL history: type search, Up/Down select, Enter rerun, Esc close";
 pub(super) const FOOTER_DATA_FILTER_HELP: &str =
@@ -115,3 +120,34 @@ pub(super) const FOOTER_DATA_GRID_HELP: &str =
     "Data tab: / filter, n/p page, y row, Y cell, w WHERE, i stage edit, [/] resize, f freeze";
 pub(super) const FOOTER_DATA_HELP: &str =
     "Data tab: / filter, n/p page, F3 SQL, F4 Structure, j/k assets, Tab grid, e SQL, F10 history";
+
+pub(super) const HELP_GLOBAL_SHORTCUTS: [(&str, &str); 5] = [
+    ("F1 / ?", "Open or close keyboard help"),
+    ("Ctrl-P", "Open command palette"),
+    ("F2 / Alt-1", "Focus Data tab"),
+    ("F3 / Alt-2", "Focus SQL tab"),
+    ("F4 / Alt-3", "Focus Structure tab"),
+];
+
+pub(super) const HELP_DATA_SHORTCUTS: [(&str, &str); 5] = [
+    ("Tab", "Cycle between assets, grid, and editor"),
+    ("/", "Open safe data filter"),
+    ("n / p", "Load next or previous preview page"),
+    ("y / Y / w", "Copy row, cell, or WHERE clause"),
+    ("i", "Stage an edit for the selected cell"),
+];
+
+pub(super) const HELP_SQL_SHORTCUTS: [(&str, &str); 5] = [
+    ("e", "Open SQL editor from the browser"),
+    ("Ctrl-Enter", "Run the statement under the cursor"),
+    ("F10 / Ctrl-R", "Open SQL history"),
+    ("F11 / F12", "Explain or Explain Analyze"),
+    ("Tab", "Cycle editor, results, and assets"),
+];
+
+pub(super) const HELP_STRUCTURE_SHORTCUTS: [(&str, &str); 4] = [
+    ("F4 / Alt-3", "Switch to structure"),
+    ("Tab", "Focus the structure grid"),
+    ("Enter", "Inspect the current field or row"),
+    ("[ / ] / =", "Resize or reset selected column width"),
+];

@@ -140,6 +140,7 @@ pub struct WorkspaceView<'a> {
     pub data_filter: Option<DataFilterView<'a>>,
     pub cell_edit: Option<CellEditView<'a>>,
     pub row_inspector: Option<RowInspectorView<'a>>,
+    pub help_overlay_visible: bool,
     pub editor: Option<EditorView<'a>>,
     pub editor_completion: Option<EditorCompletionView<'a>>,
     pub structure: Option<StructureView<'a>>,

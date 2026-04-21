@@ -677,6 +677,40 @@ fn footer_renders_status_text_inside_the_status_box() -> Result<()> {
 }
 
 #[test]
+fn help_overlay_renders_workspace_shortcuts() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+        )),
+    }];
+    let mut app = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    app.apply_action(WorkspaceAction::OpenHelpOverlay)?;
+    let backend = TestBackend::new(120, 36);
+    let mut terminal = Terminal::new(backend)?;
+
+    terminal.draw(|frame| draw(frame, &AppShell::Workspace(app.into())))?;
+
+    let buffer = terminal.backend().buffer();
+    let rendered = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Keyboard Help"));
+    assert!(rendered.contains("Global"));
+    assert!(rendered.contains("F2 / Alt-1"));
+    assert!(rendered.contains("Ctrl-P"));
+    assert!(rendered.contains("Data"));
+    Ok(())
+}
+
+#[test]
 fn workspace_header_renders_compact_context_bar() -> Result<()> {
     let bootstraps = vec![ConnectionBootstrap {
         name: "localhost".to_string(),
@@ -1534,6 +1568,64 @@ fn workspace_delete_confirmation_blocks_editor_input_until_answered() -> Result<
             .expect("cancel should set status")
             .contains("canceled")
     );
+    Ok(())
+}
+
+#[test]
+fn question_mark_opens_help_in_browser_but_stays_text_in_sql_editor() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+        )),
+    }];
+    let mut app = WorkspaceApp::bootstrap(bootstraps, 50)?;
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT),
+    )?;
+    assert!(app.view().help_overlay_visible);
+
+    handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))?;
+    assert!(!app.view().help_overlay_visible);
+
+    app.apply_action(WorkspaceAction::OpenSqlEditor)?;
+    app.set_editor_sql("SELECT ")?;
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT),
+    )?;
+
+    assert!(!app.view().help_overlay_visible);
+    assert_eq!(
+        app.editor_snapshot()
+            .expect("editor should remain open while typing")
+            .sql,
+        "SELECT ?"
+    );
+    Ok(())
+}
+
+#[test]
+fn fullwidth_question_mark_opens_help_in_browser() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+        )),
+    }];
+    let mut app = WorkspaceApp::bootstrap(bootstraps, 50)?;
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('？'), KeyModifiers::NONE),
+    )?;
+
+    assert!(app.view().help_overlay_visible);
     Ok(())
 }
 

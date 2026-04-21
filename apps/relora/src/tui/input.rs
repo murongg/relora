@@ -21,6 +21,7 @@ pub(super) fn handle_shell_key(app: &mut AppShell, key: KeyEvent) -> Result<bool
 
 fn workspace_can_return_to_launcher(workspace: &WorkspaceApp) -> bool {
     !workspace.delete_confirmation_open()
+        && !workspace.help_overlay_open()
         && !workspace.command_palette_open()
         && !workspace.sql_history_open()
         && !workspace.data_filter_open()
@@ -38,6 +39,10 @@ pub(super) fn handle_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
 
     if app.delete_confirmation_open() {
         return handle_delete_confirmation_key(app, key);
+    }
+
+    if app.help_overlay_open() {
+        return handle_help_overlay_key(app, key);
     }
 
     if app.command_palette_open() {
@@ -67,6 +72,14 @@ pub(super) fn handle_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
             && key.code == KeyCode::Char(KEY_SQL_HISTORY))
     {
         return app.apply_action(WorkspaceAction::OpenSqlHistory);
+    }
+
+    if key.code == KeyCode::F(FKEY_HELP) {
+        return app.apply_action(WorkspaceAction::OpenHelpOverlay);
+    }
+
+    if is_help_key(key.code) && should_open_help_overlay(app, key) {
+        return app.apply_action(WorkspaceAction::OpenHelpOverlay);
     }
 
     if let Some(action) = map_right_tab_key_to_action(key) {
@@ -366,6 +379,31 @@ pub(super) fn handle_command_palette_key(app: &mut WorkspaceApp, key: KeyEvent) 
     }
 }
 
+fn should_open_help_overlay(app: &WorkspaceApp, key: KeyEvent) -> bool {
+    !key.modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        && !(app.active_right_tab() == RightPaneTab::Sql
+            && app.is_editor_open()
+            && app.sql_editor_focused())
+}
+
+pub(super) fn handle_help_overlay_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc | KeyCode::Enter | KeyCode::F(FKEY_HELP) => {
+            app.apply_action(WorkspaceAction::CloseHelpOverlay)
+        }
+        code if is_help_key(code) => app.apply_action(WorkspaceAction::CloseHelpOverlay),
+        _ => Ok(()),
+    }
+}
+
+fn is_help_key(code: KeyCode) -> bool {
+    matches!(
+        code,
+        KeyCode::Char(KEY_HELP) | KeyCode::Char(KEY_HELP_FULLWIDTH)
+    )
+}
+
 pub(super) fn handle_sql_history_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char(KEY_SQL_HISTORY) {
         return app.apply_action(WorkspaceAction::CloseSqlHistory);
@@ -662,6 +700,10 @@ pub(super) fn handle_shell_mouse(
 }
 
 pub(super) fn handle_mouse(app: &mut WorkspaceApp, mouse: MouseEvent, area: Rect) -> Result<()> {
+    if app.help_overlay_open() {
+        return Ok(());
+    }
+
     if app.row_inspector_open() {
         return handle_row_inspector_mouse(app, mouse, area);
     }

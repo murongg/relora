@@ -27,6 +27,10 @@ pub(super) fn draw_workspace(frame: &mut Frame<'_>, app: &WorkspaceApp) {
         draw_row_inspector(frame, frame.area(), row_inspector);
     }
 
+    if view.help_overlay_visible {
+        draw_help_overlay(frame, frame.area());
+    }
+
     if let Some(data_filter) = view.data_filter {
         draw_data_filter(frame, frame.area(), data_filter);
     }
@@ -1329,6 +1333,61 @@ pub(super) fn draw_command_palette(
     frame.render_stateful_widget(list, sections[1], &mut state);
 }
 
+fn push_help_section(
+    lines: &mut Vec<Line<'static>>,
+    title: &'static str,
+    shortcuts: &[(&'static str, &'static str)],
+) {
+    if !lines.is_empty() {
+        lines.push(Line::from(String::new()));
+    }
+
+    lines.push(Line::from(Span::styled(
+        title,
+        Style::default()
+            .fg(theme_accent_color())
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    for (keys, description) in shortcuts {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{keys:<14}"),
+                Style::default()
+                    .fg(TEXT_STRONG)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(*description, Style::default().fg(TEXT_SECONDARY)),
+        ]));
+    }
+}
+
+pub(super) fn draw_help_overlay(frame: &mut Frame<'_>, area: Rect) {
+    let popup = centered_rect(
+        HELP_OVERLAY_WIDTH_PERCENT,
+        HELP_OVERLAY_HEIGHT_PERCENT,
+        area,
+    );
+    frame.render_widget(Clear, popup);
+
+    let block = focusable_block(format!("{TITLE_KEYBOARD_HELP} | Esc close"), true);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let mut lines = Vec::new();
+    push_help_section(&mut lines, HELP_SECTION_GLOBAL, &HELP_GLOBAL_SHORTCUTS);
+    push_help_section(&mut lines, HELP_SECTION_DATA, &HELP_DATA_SHORTCUTS);
+    push_help_section(&mut lines, HELP_SECTION_SQL, &HELP_SQL_SHORTCUTS);
+    push_help_section(
+        &mut lines,
+        HELP_SECTION_STRUCTURE,
+        &HELP_STRUCTURE_SHORTCUTS,
+    );
+
+    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(body, inner);
+}
+
 pub(super) fn draw_sql_history(frame: &mut Frame<'_>, area: Rect, history: SqlHistoryView<'_>) {
     let popup = centered_rect(SQL_HISTORY_WIDTH_PERCENT, SQL_HISTORY_HEIGHT_PERCENT, area);
     frame.render_widget(Clear, popup);
@@ -1452,7 +1511,9 @@ where
 
 pub(super) fn draw_footer(frame: &mut Frame<'_>, area: Rect, view: WorkspaceView<'_>) {
     let status = view.status.unwrap_or(READY_STATUS);
-    let help = if view.command_palette.is_some() {
+    let help = if view.help_overlay_visible {
+        FOOTER_KEYBOARD_HELP
+    } else if view.command_palette.is_some() {
         FOOTER_COMMAND_HELP
     } else if view.sql_history.is_some() {
         FOOTER_SQL_HISTORY_HELP

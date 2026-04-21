@@ -16,6 +16,7 @@ pub(super) const TITLE_STATUS: &str = "Status";
 pub(super) const TITLE_SEARCH: &str = "Search";
 pub(super) const TITLE_STRUCTURE: &str = "Structure";
 pub(super) const TITLE_SQL: &str = "SQL";
+pub(super) const TITLE_KEYBOARD_HELP: &str = "Keyboard Help";
 pub(super) const TITLE_SAVED_CONNECTIONS: &str = "Saved Connections";
 pub(super) const TITLE_NEW_CONNECTION: &str = "New Connection";
 pub(super) const TITLE_EDIT_CONNECTION: &str = "Edit Connection";
@@ -56,6 +57,11 @@ pub(super) const DELETE_CONNECTION_WARNING_PROFILE: &str =
 pub(super) const DELETE_CONNECTION_WARNING_DATABASE: &str = "The database is not modified.";
 pub(super) const DELETE_OPERATION_WARNING: &str =
     "Relora will send this statement to the database only after confirmation.";
+
+pub(super) const HELP_SECTION_GLOBAL: &str = "Global";
+pub(super) const HELP_SECTION_DATA: &str = "Data";
+pub(super) const HELP_SECTION_SQL: &str = "SQL";
+pub(super) const HELP_SECTION_STRUCTURE: &str = "Structure";
 
 pub(super) const EMPTY_GRID_MESSAGE: &str = "No rows available.";
 pub(super) const LOADING_PREVIEW_MESSAGE: &str = "Loading preview...";

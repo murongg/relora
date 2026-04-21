@@ -816,6 +816,67 @@ fn workspace_tree_collapses_mysql_database_schema_duplicate_level() -> Result<()
 }
 
 #[test]
+fn workspace_tree_collapses_sqlite_database_schema_duplicate_level() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "sqlite".to_string(),
+        driver: Box::new(
+            MockDriver::new(
+                vec![Catalog {
+                    databases: vec![
+                        DatabaseEntry {
+                            name: "main".to_string(),
+                            schemas: vec![SchemaEntry {
+                                database: "main".to_string(),
+                                name: "main".to_string(),
+                                objects: vec![DbObjectRef {
+                                    database: "main".to_string(),
+                                    schema: "main".to_string(),
+                                    name: "activities".to_string(),
+                                    kind: DbObjectKind::Table,
+                                }],
+                            }],
+                        },
+                        DatabaseEntry {
+                            name: "analytics".to_string(),
+                            schemas: vec![SchemaEntry {
+                                database: "analytics".to_string(),
+                                name: "analytics".to_string(),
+                                objects: vec![DbObjectRef {
+                                    database: "analytics".to_string(),
+                                    schema: "analytics".to_string(),
+                                    name: "events".to_string(),
+                                    kind: DbObjectKind::Table,
+                                }],
+                            }],
+                        },
+                    ],
+                }],
+                vec![preview(&["id"], &[&["1"]])],
+                vec![],
+                vec![],
+            )
+            .with_kind(DatabaseKind::Sqlite),
+        ),
+    }];
+
+    let workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    let rows = workspace.tree_rows();
+    let main_rows = rows
+        .iter()
+        .filter(|row| row.label == "main")
+        .collect::<Vec<_>>();
+    let labels = rows
+        .iter()
+        .map(|row| row.label.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(main_rows.len(), 1);
+    assert!(labels.contains(&"Tables"));
+    assert!(labels.contains(&"activities"));
+    Ok(())
+}
+
+#[test]
 fn workspace_builds_insert_update_and_delete_templates_for_selected_table() -> Result<()> {
     let bootstraps = vec![ConnectionBootstrap {
         name: "pg".to_string(),

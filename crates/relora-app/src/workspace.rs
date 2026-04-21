@@ -4187,8 +4187,9 @@ fn build_rows_for_session(connection_index: usize, session: &ConnectionSession) 
         }
 
         for schema in &database.schemas {
-            let collapse_schema =
-                session.kind == DatabaseKind::MySql && schema.name == database.name;
+            let collapse_schema = session
+                .kind
+                .collapses_duplicate_schema(&database.name, &schema.name);
             let group_depth = if collapse_schema {
                 database_depth + 1
             } else {

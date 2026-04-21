@@ -1,5 +1,7 @@
 use super::*;
-use relora_core::db::{DbObjectRef, DriverCapabilities, ExplainFlavor, IdentifierQuoteStyle};
+use relora_core::db::{
+    DatabaseKind, DbObjectRef, DriverCapabilities, ExplainFlavor, IdentifierQuoteStyle,
+};
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &AppShell) {
     match app {
@@ -1673,7 +1675,7 @@ pub(super) fn database_kind_label(kind: DatabaseKind) -> &'static str {
 }
 
 pub(super) fn object_scope_label(kind: Option<DatabaseKind>, object: &DbObjectRef) -> String {
-    if kind == Some(DatabaseKind::MySql) && object.database == object.schema {
+    if kind.is_some_and(|kind| kind.collapses_duplicate_schema(&object.database, &object.schema)) {
         format!("{}.{}", object.database, object.name)
     } else {
         object.database_qualified_name()

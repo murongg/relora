@@ -19,6 +19,10 @@ impl DatabaseKind {
             other => bail!("unsupported database scheme: {other}"),
         }
     }
+
+    pub fn collapses_duplicate_schema(self, database: &str, schema: &str) -> bool {
+        matches!(self, Self::MySql | Self::Sqlite) && database == schema
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

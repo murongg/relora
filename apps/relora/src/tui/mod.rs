@@ -36,7 +36,7 @@ use relora_app::{
         RightPaneTab, RowInspectorPane, RowInspectorView, SqlHistoryView, WorkspaceView,
     },
 };
-use relora_core::db::{DatabaseKind, TablePreview};
+use relora_core::db::TablePreview;
 use serde_json::Value as JsonValue;
 
 use crate::{

@@ -232,6 +232,21 @@ fn mysql_object_scope_label_collapses_duplicate_database_schema() {
     );
 }
 
+#[test]
+fn sqlite_object_scope_label_collapses_duplicate_database_schema() {
+    let object = DbObjectRef {
+        database: "main".to_string(),
+        schema: "main".to_string(),
+        name: "activities".to_string(),
+        kind: DbObjectKind::Table,
+    };
+
+    assert_eq!(
+        render::object_scope_label(Some(DatabaseKind::Sqlite), &object),
+        "main.activities"
+    );
+}
+
 fn drain_until_result_visible(app: &mut WorkspaceApp) -> Result<()> {
     for _ in 0..20 {
         app.drain_background()?;

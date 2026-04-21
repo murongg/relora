@@ -230,7 +230,13 @@ impl DatabaseDriver for ExternalCommandDriver {
     }
 
     fn load_catalog_summary(&mut self) -> Result<CatalogSummary> {
-        self.run_json("catalog-summary", Vec::new())
+        match self.run_json("catalog-summary", Vec::new()) {
+            Ok(summary) => Ok(summary),
+            Err(error) if is_legacy_sidecar_protocol_error(&error, "catalog-summary") => {
+                self.load_catalog().map(CatalogSummary::from)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn load_schema_objects(&mut self, database: &str, schema: &str) -> Result<Vec<DbObjectRef>> {
@@ -251,7 +257,7 @@ impl DatabaseDriver for ExternalCommandDriver {
         schema: &str,
         kind: DbObjectKind,
     ) -> Result<Vec<DbObjectRef>> {
-        self.run_json(
+        let result = self.run_json(
             "schema-objects",
             vec![
                 "--database".into(),
@@ -261,7 +267,17 @@ impl DatabaseDriver for ExternalCommandDriver {
                 "--kind".into(),
                 kind.wire_name().into(),
             ],
-        )
+        );
+
+        match result {
+            Ok(objects) => Ok(objects),
+            Err(error) if is_legacy_sidecar_protocol_error(&error, "--kind") => Ok(self
+                .load_schema_objects(database, schema)?
+                .into_iter()
+                .filter(|object| object.kind == kind)
+                .collect()),
+            Err(error) => Err(error),
+        }
     }
 
     fn load_preview_page(
@@ -369,6 +385,20 @@ where
             command
         )
     })
+}
+
+fn is_legacy_sidecar_protocol_error(error: &anyhow::Error, token: &str) -> bool {
+    let message = format!("{error:#}");
+    message.contains(token)
+        && [
+            "unrecognized subcommand",
+            "unexpected argument",
+            "unrecognized option",
+            "unknown option",
+            "wasn't expected",
+        ]
+        .iter()
+        .any(|marker| message.contains(marker))
 }
 
 fn external_connection_label(kind: DatabaseKind, url: &str) -> String {
@@ -553,5 +583,97 @@ mod tests {
             preferred_driver_candidate(None, None, None, cargo_bin.clone()),
             cargo_bin
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_driver_falls_back_to_catalog_when_catalog_summary_is_unsupported() {
+        let binary = write_legacy_sidecar_script("catalog-summary-fallback");
+        let mut driver = ExternalCommandDriver::new(
+            DatabaseKind::Postgres,
+            "postgresql://postgres@localhost/postgres",
+            binary,
+        );
+
+        let summary = driver
+            .load_catalog_summary()
+            .expect("old sidecars should still support catalog summary via catalog fallback");
+
+        assert_eq!(summary.object_count(), 2);
+        assert_eq!(
+            summary
+                .find_schema("postgres", "public")
+                .expect("public schema should be present")
+                .object_count(DbObjectKind::View),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_driver_falls_back_to_schema_objects_when_kind_flag_is_unsupported() {
+        let binary = write_legacy_sidecar_script("schema-kind-fallback");
+        let mut driver = ExternalCommandDriver::new(
+            DatabaseKind::Postgres,
+            "postgresql://postgres@localhost/postgres",
+            binary,
+        );
+
+        let objects = driver
+            .load_schema_objects_of_kind("postgres", "public", DbObjectKind::View)
+            .expect("old sidecars should still support group loading via local filtering");
+
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].name, "active_users");
+        assert_eq!(objects[0].kind, DbObjectKind::View);
+    }
+
+    #[cfg(unix)]
+    fn write_legacy_sidecar_script(name: &str) -> PathBuf {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = env::temp_dir().join(format!("relora-{name}-{}.sh", std::process::id()));
+        fs::write(
+            &path,
+            r#"#!/bin/sh
+command="$3"
+
+case "$command" in
+  catalog-summary)
+    echo "error: unrecognized subcommand 'catalog-summary'" >&2
+    exit 2
+    ;;
+  schema-objects)
+    for arg in "$@"; do
+      if [ "$arg" = "--kind" ]; then
+        echo "error: unexpected argument '--kind' found" >&2
+        exit 2
+      fi
+    done
+    cat <<'JSON'
+[{"database":"postgres","schema":"public","name":"users","kind":"Table"},{"database":"postgres","schema":"public","name":"active_users","kind":"View"}]
+JSON
+    ;;
+  catalog)
+    cat <<'JSON'
+{"databases":[{"name":"postgres","schemas":[{"database":"postgres","name":"public","objects":[{"database":"postgres","schema":"public","name":"users","kind":"Table"},{"database":"postgres","schema":"public","name":"active_users","kind":"View"}]}]}]}
+JSON
+    ;;
+  *)
+    echo "error: unrecognized subcommand '$command'" >&2
+    exit 2
+    ;;
+esac
+"#,
+        )
+        .expect("legacy sidecar script should be written");
+        let mut permissions = fs::metadata(&path)
+            .expect("legacy sidecar script metadata should be readable")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions)
+            .expect("legacy sidecar script should be executable");
+        path
     }
 }

@@ -279,7 +279,7 @@ fn run_loop(
         }
 
         let should_quit = match event::read()? {
-            Event::Key(key) if key.kind == KeyEventKind::Press => handle_shell_key(app, key)?,
+            Event::Key(key) if should_handle_key_event(key) => handle_shell_key(app, key)?,
             Event::Mouse(mouse) => {
                 let size = terminal.size()?;
                 let area = Rect::new(0, 0, size.width, size.height);
@@ -301,6 +301,10 @@ fn run_loop(
     }
 
     Ok(())
+}
+
+fn should_handle_key_event(key: KeyEvent) -> bool {
+    matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
 }
 
 fn bootstrap_workspace(

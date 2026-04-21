@@ -511,6 +511,25 @@ fn right_tab_keys_include_structure_tab() {
 }
 
 #[test]
+fn runtime_accepts_repeated_key_events_for_held_navigation_keys() {
+    assert!(should_handle_key_event(KeyEvent::new_with_kind(
+        KeyCode::Down,
+        KeyModifiers::NONE,
+        KeyEventKind::Press
+    )));
+    assert!(should_handle_key_event(KeyEvent::new_with_kind(
+        KeyCode::Down,
+        KeyModifiers::NONE,
+        KeyEventKind::Repeat
+    )));
+    assert!(!should_handle_key_event(KeyEvent::new_with_kind(
+        KeyCode::Down,
+        KeyModifiers::NONE,
+        KeyEventKind::Release
+    )));
+}
+
+#[test]
 fn editor_shortcuts_include_explain_and_staged_commit() {
     assert_eq!(
         map_editor_control_key_to_action(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)),

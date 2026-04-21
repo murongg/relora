@@ -135,6 +135,7 @@ fn cli_loads_saved_connections_for_launcher_mode() {
             &[relora::config::ConnectionConfig {
                 name: "pg".to_string(),
                 url: "postgresql://postgres:postgres@localhost/postgres".to_string(),
+                read_only: false,
             }],
         )
         .expect("saved connections should be written");

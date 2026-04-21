@@ -44,6 +44,7 @@ pub(super) const DATABASE_BADGE_GENERIC: &str = " DB ";
 
 pub(super) const FORM_NAME_LABEL: &str = "Name";
 pub(super) const FORM_DRIVER_LABEL: &str = "Driver";
+pub(super) const FORM_ACCESS_LABEL: &str = "Mode";
 pub(super) const FORM_HOST_LABEL: &str = "Host / SQLite path";
 pub(super) const FORM_PORT_LABEL: &str = "Port";
 pub(super) const FORM_DATABASE_LABEL: &str = "Database";

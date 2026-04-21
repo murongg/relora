@@ -196,8 +196,26 @@ expect architecture tests to fail if you drift from established patterns.
 Behavioral coverage is split across:
 
 - `apps/relora/src/tui/tests.rs`
+- `apps/relora/src/tui/snapshot_tests.rs`
 - `apps/relora/tests/workspace.rs`
 - `apps/relora/tests/cli.rs`
+
+Use the layers intentionally:
+
+- `apps/relora/src/tui/tests.rs`: focused rendering/input regressions and layout edge cases
+- `apps/relora/src/tui/snapshot_tests.rs`: golden snapshots for stable core surfaces such as launcher, data/sql/structure tabs, row inspector, and help overlay
+- `apps/relora/tests/workspace.rs`: higher-level end-to-end-ish workspace flows that span background work, tab switching, filtering, SQL execution, and row inspection
+
+When you change a major TUI surface:
+
+- update or extend the relevant golden snapshot
+- add or update a workspace flow test if the change spans multiple panes, background tasks, or user steps
+
+Snapshot update command:
+
+```bash
+RELORA_UPDATE_TUI_SNAPSHOTS=1 cargo test -p relora golden_snapshot -- --nocapture
+```
 
 When fixing bugs, prefer adding or updating a focused regression test before or alongside the production change.
 

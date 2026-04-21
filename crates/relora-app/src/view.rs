@@ -119,6 +119,7 @@ pub struct WorkspaceView<'a> {
     pub selected_connection_label: Option<&'a str>,
     pub selected_database_name: Option<&'a str>,
     pub selected_connection_kind: Option<DatabaseKind>,
+    pub selected_connection_read_only: bool,
     pub selected_connection_busy: bool,
     pub selected_schema_name: Option<&'a str>,
     pub selected_group_kind: Option<DbObjectKind>,

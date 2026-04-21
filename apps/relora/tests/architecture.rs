@@ -106,6 +106,46 @@ fn tui_runtime_is_split_into_modules() {
         root.join("grid.rs"),
         root.join("render.rs"),
         root.join("tests.rs"),
+        root.join("snapshot_tests.rs"),
+    ] {
+        assert!(path.exists(), "expected {:?} to exist", path);
+    }
+}
+
+#[test]
+fn tui_golden_snapshots_exist_for_core_surfaces() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tui");
+    let snapshot_tests = root.join("snapshot_tests.rs");
+    assert!(
+        snapshot_tests.exists(),
+        "expected {:?} to define the golden snapshot suite",
+        snapshot_tests
+    );
+
+    let snapshot_test_source =
+        fs::read_to_string(&snapshot_tests).expect("snapshot test module should be readable");
+    for scenario in [
+        "launcher_golden_snapshot",
+        "data_tab_golden_snapshot",
+        "sql_tab_golden_snapshot",
+        "structure_tab_golden_snapshot",
+        "row_inspector_golden_snapshot",
+        "help_overlay_golden_snapshot",
+    ] {
+        assert!(
+            snapshot_test_source.contains(scenario),
+            "snapshot test module should define {scenario}"
+        );
+    }
+
+    let snapshots = root.join("snapshots");
+    for path in [
+        snapshots.join("launcher.snap"),
+        snapshots.join("workspace_data_tab.snap"),
+        snapshots.join("workspace_sql_tab.snap"),
+        snapshots.join("workspace_structure_tab.snap"),
+        snapshots.join("workspace_row_inspector.snap"),
+        snapshots.join("workspace_help_overlay.snap"),
     ] {
         assert!(path.exists(), "expected {:?} to exist", path);
     }

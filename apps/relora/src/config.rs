@@ -69,6 +69,7 @@ pub enum LaunchMode {
 pub struct ConnectionConfig {
     pub name: String,
     pub url: String,
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +124,7 @@ impl Cli {
                 connections.push(ConnectionConfig {
                     name: "default".to_string(),
                     url,
+                    read_only: false,
                 });
             }
         }
@@ -169,6 +171,7 @@ fn parse_named_connection(value: String) -> Result<ConnectionConfig, ConfigError
     Ok(ConnectionConfig {
         name: name.to_string(),
         url: url.to_string(),
+        read_only: false,
     })
 }
 
@@ -233,6 +236,10 @@ pub fn load_saved_connections_from_path(path: &Path) -> Result<Vec<ConnectionCon
             Ok(ConnectionConfig {
                 name: name.to_string(),
                 url: url.to_string(),
+                read_only: item
+                    .get("read_only")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
             })
         })
         .collect()
@@ -255,6 +262,7 @@ pub fn save_saved_connections_to_path(
             .map(|connection| json!({
                 "name": connection.name,
                 "url": connection.url,
+                "read_only": connection.read_only,
             }))
             .collect::<Vec<_>>()
     }))

@@ -213,6 +213,11 @@ pub(super) fn draw_launcher(frame: &mut Frame<'_>, app: &LauncherApp) {
                             connection.name.as_str(),
                             Style::default().add_modifier(Modifier::BOLD),
                         ),
+                        if connection.read_only {
+                            Span::styled("  read-only", Style::default().fg(theme_accent_color()))
+                        } else {
+                            Span::raw("")
+                        },
                         Span::raw("  "),
                         Span::styled(status, Style::default().fg(theme_accent_color())),
                     ]),
@@ -511,6 +516,15 @@ pub(super) fn draw_launcher_form(
             LauncherFormField::Driver,
             FORM_DRIVER_LABEL,
             form.driver.label().to_string(),
+        ),
+        (
+            LauncherFormField::Access,
+            FORM_ACCESS_LABEL,
+            if form.read_only {
+                "Read-only".to_string()
+            } else {
+                "Read-write".to_string()
+            },
         ),
         (
             LauncherFormField::Host,
@@ -871,6 +885,10 @@ pub(super) fn draw_summary(frame: &mut Frame<'_>, area: Rect, view: WorkspaceVie
 
     if let Some(database_name) = view.selected_database_name {
         lines.push(Line::from(format!("Database: {database_name}")));
+    }
+
+    if view.selected_connection_read_only {
+        lines.push(Line::from("Mode: read-only"));
     }
 
     lines.push(Line::from(format!(

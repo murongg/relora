@@ -55,6 +55,8 @@ mod layout;
 mod metrics;
 mod render;
 mod shortcuts;
+#[cfg(test)]
+mod snapshot_tests;
 mod strings;
 #[cfg(test)]
 mod tests;
@@ -314,7 +316,11 @@ fn bootstrap_workspace(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    WorkspaceApp::bootstrap(bootstraps, preview_limit)
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, preview_limit)?;
+    for (index, connection) in connections.iter().enumerate() {
+        workspace.set_connection_read_only(index, connection.read_only)?;
+    }
+    Ok(workspace)
 }
 
 fn launcher_connections_for_workspace(config: &AppConfig) -> Vec<ConnectionConfig> {

@@ -1,0 +1,28 @@
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+              ┌Keyboard Help | Esc close───────────────────────────────────────────────────────┐              
+              │Global                                                                          │              
+              │F1 / ?        Open or close keyboard help                                       │              
+              │Ctrl-P        Open command palette                                              │              
+              │F2 / Alt-1    Focus Data tab                                                    │              
+              │F3 / Alt-2    Focus SQL tab                                                     │              
+              │F4 / Alt-3    Focus Structure tab                                               │              
+              │                                                                                │              
+              │Data                                                                            │              
+              │Tab           Cycle between assets, grid, and editor                            │              
+              │/             Open safe data filter                                             │              
+              │n / p         Load next or previous preview page                                │              
+              │y / Y / w     Copy row, cell, or WHERE clause                                   │              
+              │i             Stage an edit for the selected cell                               │              
+              │                                                                                │              
+              │SQL                                                                             │              
+              │e             Open SQL editor from the browser                                  │              
+              │Ctrl-Enter    Run the statement under the cursor                                │              
+              │F10 / Ctrl-R  Open SQL history                                                  │              
+              └────────────────────────────────────────────────────────────────────────────────┘              
+                                                                                                              
+                                                                                                              
+                                                                                                              
+                                                                                                              

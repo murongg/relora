@@ -1,0 +1,32 @@
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                 █▀█ █▀▀ █   █▀█ █▀█ ▄▀█                                                
+                                                 █▀▄ ██▄ █▄▄ █▄█ █▀▄ █▀█                                                
+                                                                                                                        
+                          Terminal Database Workspace                                                                   
+                          Open a saved workspace. Relora keeps multi-connection browsing, SQL                           
+                          Saved Connections   Profiles 2    Ready 1                                                     
+                          PostgreSQL, MySQL/MariaDB and SQLite use external sidecar drivers.                            
+                          ›  PG  pg  Focused                                                                            
+                            postgresql://postgres:postgres@localhost/postgres                                           
+                             MY  mysql  Ready                                                                           
+                            mysql://root:secret@localhost/mysql                                                         
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                          Launch selected: Enter   New connection: a   Edit: e   Delete: d                              
+                          Multi-select: Space                                                                           
+                          Choose a saved workspace or create a new connection profile.                                  
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        

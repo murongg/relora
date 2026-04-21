@@ -39,6 +39,7 @@ pub enum LauncherOutcome {
 pub enum LauncherFormField {
     Name,
     Driver,
+    Access,
     Host,
     Port,
     Database,
@@ -51,6 +52,7 @@ pub enum LauncherFormField {
 pub struct LauncherFormSnapshot {
     pub name: String,
     pub driver: LauncherDatabaseKind,
+    pub read_only: bool,
     pub host: String,
     pub port: String,
     pub database: String,
@@ -84,6 +86,7 @@ struct ConnectionFormState {
     editing_index: Option<usize>,
     name: String,
     driver: LauncherDatabaseKind,
+    read_only: bool,
     host: String,
     port: String,
     database: String,
@@ -124,6 +127,7 @@ pub struct LauncherMissingDriverView<'a> {
 pub struct LauncherFormView<'a> {
     pub name: &'a str,
     pub driver: LauncherDatabaseKind,
+    pub read_only: bool,
     pub host: &'a str,
     pub port: &'a str,
     pub database: &'a str,
@@ -350,6 +354,7 @@ impl LauncherApp {
         Some(LauncherFormSnapshot {
             name: form.name.clone(),
             driver: form.driver,
+            read_only: form.read_only,
             host: form.host.clone(),
             port: form.port.clone(),
             database: form.database.clone(),
@@ -370,6 +375,7 @@ impl LauncherApp {
             form: self.form.as_ref().map(|form| LauncherFormView {
                 name: form.name.as_str(),
                 driver: form.driver,
+                read_only: form.read_only,
                 host: form.host.as_str(),
                 port: form.port.as_str(),
                 database: form.database.as_str(),
@@ -555,15 +561,16 @@ impl LauncherApp {
 
 impl ConnectionFormState {
     fn new(editing_index: Option<usize>, connection: Option<ConnectionConfig>) -> Self {
-        let (name, url) = connection
-            .map(|connection| (connection.name, connection.url))
-            .unwrap_or_else(|| (String::new(), String::new()));
+        let (name, url, read_only) = connection
+            .map(|connection| (connection.name, connection.url, connection.read_only))
+            .unwrap_or_else(|| (String::new(), String::new(), false));
         let parsed = StructuredConnectionFields::from_url(&url)
             .unwrap_or_else(StructuredConnectionFields::postgres_defaults);
         Self {
             editing_index,
             name,
             driver: parsed.driver,
+            read_only,
             host: parsed.host,
             port: parsed.port,
             database: parsed.database,
@@ -577,7 +584,8 @@ impl ConnectionFormState {
     fn switch_field(&mut self) {
         self.field = match self.field {
             LauncherFormField::Name => LauncherFormField::Driver,
-            LauncherFormField::Driver => LauncherFormField::Host,
+            LauncherFormField::Driver => LauncherFormField::Access,
+            LauncherFormField::Access => LauncherFormField::Host,
             LauncherFormField::Host => LauncherFormField::Port,
             LauncherFormField::Port => LauncherFormField::Database,
             LauncherFormField::Database => LauncherFormField::Username,
@@ -591,7 +599,8 @@ impl ConnectionFormState {
         self.field = match self.field {
             LauncherFormField::Name => LauncherFormField::Url,
             LauncherFormField::Driver => LauncherFormField::Name,
-            LauncherFormField::Host => LauncherFormField::Driver,
+            LauncherFormField::Access => LauncherFormField::Driver,
+            LauncherFormField::Host => LauncherFormField::Access,
             LauncherFormField::Port => LauncherFormField::Host,
             LauncherFormField::Database => LauncherFormField::Port,
             LauncherFormField::Username => LauncherFormField::Database,
@@ -604,6 +613,8 @@ impl ConnectionFormState {
         if self.field == LauncherFormField::Driver {
             self.clear_url_override_for_structured_edit();
             self.set_driver(self.driver.next());
+        } else if self.field == LauncherFormField::Access {
+            self.toggle_read_only();
         }
     }
 
@@ -611,6 +622,8 @@ impl ConnectionFormState {
         if self.field == LauncherFormField::Driver {
             self.clear_url_override_for_structured_edit();
             self.set_driver(self.driver.previous());
+        } else if self.field == LauncherFormField::Access {
+            self.toggle_read_only();
         }
     }
 
@@ -619,12 +632,19 @@ impl ConnectionFormState {
             self.update_driver_from_char(ch);
             return;
         }
+        if self.field == LauncherFormField::Access {
+            self.update_access_mode_from_char(ch);
+            return;
+        }
         self.clear_url_override_for_structured_edit();
         self.current_field_mut().push(ch);
     }
 
     fn backspace(&mut self) {
-        if self.field == LauncherFormField::Driver {
+        if matches!(
+            self.field,
+            LauncherFormField::Driver | LauncherFormField::Access
+        ) {
             return;
         }
         self.clear_url_override_for_structured_edit();
@@ -645,6 +665,15 @@ impl ConnectionFormState {
         }
     }
 
+    fn update_access_mode_from_char(&mut self, ch: char) {
+        match ch.to_ascii_lowercase() {
+            'r' => self.read_only = false,
+            'o' => self.read_only = true,
+            ' ' => self.toggle_read_only(),
+            _ => {}
+        }
+    }
+
     fn set_driver(&mut self, next: LauncherDatabaseKind) {
         self.driver = next;
         if self.port.trim().is_empty() || ["5432", "3306"].contains(&self.port.trim()) {
@@ -659,10 +688,15 @@ impl ConnectionFormState {
         }
     }
 
+    fn toggle_read_only(&mut self) {
+        self.read_only = !self.read_only;
+    }
+
     fn current_field_mut(&mut self) -> &mut String {
         match self.field {
             LauncherFormField::Name => &mut self.name,
             LauncherFormField::Driver => unreachable!("driver field is not a text field"),
+            LauncherFormField::Access => unreachable!("access field is not a text field"),
             LauncherFormField::Host => &mut self.host,
             LauncherFormField::Port => &mut self.port,
             LauncherFormField::Database => &mut self.database,
@@ -682,6 +716,7 @@ impl ConnectionFormState {
         Ok(ConnectionConfig {
             name: name.to_string(),
             url,
+            read_only: self.read_only,
         })
     }
 
@@ -869,7 +904,7 @@ mod tests {
     }
 
     fn move_form_to(launcher: &mut LauncherApp, field: LauncherFormField) -> Result<()> {
-        for _ in 0..8 {
+        for _ in 0..9 {
             if launcher.form_snapshot().expect("form should be open").field == field {
                 return Ok(());
             }
@@ -886,10 +921,12 @@ mod tests {
                 ConnectionConfig {
                     name: "pg".to_string(),
                     url: "postgresql://postgres:postgres@localhost/postgres".to_string(),
+                    read_only: false,
                 },
                 ConnectionConfig {
                     name: "analytics".to_string(),
                     url: "postgresql://postgres:postgres@localhost/analytics".to_string(),
+                    read_only: false,
                 },
             ],
             store_path,
@@ -906,10 +943,12 @@ mod tests {
                 ConnectionConfig {
                     name: "pg".to_string(),
                     url: "postgresql://postgres:postgres@localhost/postgres".to_string(),
+                    read_only: false,
                 },
                 ConnectionConfig {
                     name: "analytics".to_string(),
                     url: "postgresql://postgres:postgres@localhost/analytics".to_string(),
+                    read_only: false,
                 },
             ])
         );
@@ -938,6 +977,7 @@ mod tests {
             vec![ConnectionConfig {
                 name: "pg".to_string(),
                 url: "postgresql://postgres:postgres@localhost/postgres".to_string(),
+                read_only: false,
             }]
         );
 
@@ -965,6 +1005,7 @@ mod tests {
             vec![ConnectionConfig {
                 name: "primary".to_string(),
                 url: "postgresql://postgres:postgres@localhost/postgres".to_string(),
+                read_only: false,
             }]
         );
 
@@ -980,6 +1021,7 @@ mod tests {
             vec![ConnectionConfig {
                 name: "pg".to_string(),
                 url: "postgresql://postgres:postgres@localhost/postgres".to_string(),
+                read_only: false,
             }],
             temp_store_path("delete-cancel"),
         );
@@ -1032,6 +1074,7 @@ mod tests {
             vec![ConnectionConfig {
                 name: "analytics".to_string(),
                 url: "postgresql://alice:secret@localhost:5432/warehouse".to_string(),
+                read_only: false,
             }]
         );
         Ok(())
@@ -1057,6 +1100,7 @@ mod tests {
             vec![ConnectionConfig {
                 name: "server".to_string(),
                 url: "postgresql://localhost:5432/".to_string(),
+                read_only: false,
             }]
         );
         Ok(())
@@ -1102,6 +1146,55 @@ mod tests {
                 .driver,
             LauncherDatabaseKind::Postgres
         );
+
+        launcher.apply_action(LauncherAction::SwitchFormField)?;
+        assert_eq!(
+            launcher.form_snapshot().expect("form should be open").field,
+            LauncherFormField::Access
+        );
+        launcher.apply_action(LauncherAction::NextFormDriver)?;
+        assert!(
+            launcher
+                .form_snapshot()
+                .expect("form should be open")
+                .read_only
+        );
+        launcher.apply_action(LauncherAction::PreviousFormDriver)?;
+        assert!(
+            !launcher
+                .form_snapshot()
+                .expect("form should be open")
+                .read_only
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn launcher_can_save_read_only_connection_mode() -> Result<()> {
+        let store_path = temp_store_path("read-only-mode");
+        let mut launcher = LauncherApp::new(Vec::new(), store_path.clone());
+
+        launcher.apply_action(LauncherAction::OpenCreateConnectionForm)?;
+        for ch in "reporting".chars() {
+            launcher.insert_form_char(ch)?;
+        }
+        move_form_to(&mut launcher, LauncherFormField::Access)?;
+        launcher.insert_form_char('o')?;
+        move_form_to(&mut launcher, LauncherFormField::Url)?;
+        for ch in "postgresql://postgres:postgres@localhost/reporting".chars() {
+            launcher.insert_form_char(ch)?;
+        }
+        launcher.apply_action(LauncherAction::SubmitConnectionForm)?;
+
+        assert!(launcher.connections()[0].read_only);
+        assert_eq!(
+            load_saved_connections_from_path(&store_path)?,
+            vec![ConnectionConfig {
+                name: "reporting".to_string(),
+                url: "postgresql://postgres:postgres@localhost/reporting".to_string(),
+                read_only: true,
+            }]
+        );
         Ok(())
     }
 
@@ -1135,6 +1228,7 @@ mod tests {
             vec![ConnectionConfig {
                 name: "mysql".to_string(),
                 url: "mysql://root:secret@db.local:3307/app".to_string(),
+                read_only: false,
             }],
             temp_store_path("parse-existing"),
         );
@@ -1150,6 +1244,7 @@ mod tests {
         assert_eq!(form.database, "app");
         assert_eq!(form.username, "root");
         assert_eq!(form.password, "secret");
+        assert!(!form.read_only);
         Ok(())
     }
 
@@ -1159,6 +1254,7 @@ mod tests {
             vec![ConnectionConfig {
                 name: "mysql".to_string(),
                 url: "mysql://root:secret@db.local:3307/app".to_string(),
+                read_only: false,
             }],
             temp_store_path("edit-structured"),
         );

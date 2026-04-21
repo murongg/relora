@@ -546,4 +546,77 @@ mod tests {
             }]
         );
     }
+
+    #[test]
+    fn normalize_commands_keeps_only_the_latest_refresh_request() {
+        let mut canceled = std::collections::HashSet::new();
+        let commands = vec![
+            SessionCommand::RefreshCatalog {
+                request_id: 1,
+                selected_object: Some(object("users")),
+                preview_limit: 100,
+                preview_offset: 0,
+                preview_filter: None,
+            },
+            SessionCommand::RefreshCatalog {
+                request_id: 2,
+                selected_object: Some(object("users")),
+                preview_limit: 100,
+                preview_offset: 0,
+                preview_filter: Some("status = 'active'".to_string()),
+            },
+        ];
+
+        let (normalized, should_shutdown) = normalize_commands(commands, &mut canceled);
+
+        assert!(!should_shutdown);
+        assert_eq!(
+            normalized,
+            vec![SessionCommand::RefreshCatalog {
+                request_id: 2,
+                selected_object: Some(object("users")),
+                preview_limit: 100,
+                preview_offset: 0,
+                preview_filter: Some("status = 'active'".to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn normalize_commands_discards_canceled_refreshes_before_coalescing() {
+        let mut canceled = std::collections::HashSet::new();
+        let commands = vec![
+            SessionCommand::RefreshCatalog {
+                request_id: 1,
+                selected_object: Some(object("users")),
+                preview_limit: 100,
+                preview_offset: 0,
+                preview_filter: None,
+            },
+            SessionCommand::CancelRequests {
+                request_ids: vec![1],
+            },
+            SessionCommand::RefreshCatalog {
+                request_id: 2,
+                selected_object: Some(object("users")),
+                preview_limit: 100,
+                preview_offset: 100,
+                preview_filter: Some("status = 'pending'".to_string()),
+            },
+        ];
+
+        let (normalized, should_shutdown) = normalize_commands(commands, &mut canceled);
+
+        assert!(!should_shutdown);
+        assert_eq!(
+            normalized,
+            vec![SessionCommand::RefreshCatalog {
+                request_id: 2,
+                selected_object: Some(object("users")),
+                preview_limit: 100,
+                preview_offset: 100,
+                preview_filter: Some("status = 'pending'".to_string()),
+            }]
+        );
+    }
 }

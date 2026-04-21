@@ -85,8 +85,7 @@ pub(super) const LAUNCHER_FOOTER_FORM: &str =
     "Type details, Tab switches field, Enter saves, Esc cancels.";
 pub(super) const LAUNCHER_FOOTER_IDLE: &str =
     "j/k select profiles, Space queues multiple launches, q exits Relora.";
-pub(super) const FORM_SAVE_HELP: &str =
-    "Driver field: t tests, p/m/s or Left/Right selects. Ctrl-T tests anywhere.";
+pub(super) const FORM_SAVE_HELP: &str = "Driver/Mode: t tests, p/m/s or Left/Right select driver, r/o or Left/Right toggle mode. Ctrl-T tests anywhere.";
 pub(super) const DRIVER_MISSING_HELP: &str = "Press Esc or Enter to close.";
 pub(super) const DELETE_CONNECTION_HELP: &str = "Press y to delete, n or Esc to cancel.";
 pub(super) const DELETE_OPERATION_HELP: &str = "Press y to execute, n or Esc to cancel.";

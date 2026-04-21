@@ -318,6 +318,7 @@ struct ConnectionSession {
     name: String,
     connection_label: String,
     kind: DatabaseKind,
+    read_only: bool,
     app: ConnectionApp,
     worker: SessionWorker,
     expanded: bool,
@@ -432,6 +433,44 @@ impl DeleteOperationKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriteOperationKind {
+    Insert,
+    Update,
+    Delete,
+    Truncate,
+    Drop,
+    Alter,
+    Create,
+    Replace,
+    Merge,
+}
+
+impl WriteOperationKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Insert => "INSERT",
+            Self::Update => "UPDATE",
+            Self::Delete => "DELETE",
+            Self::Truncate => "TRUNCATE",
+            Self::Drop => "DROP",
+            Self::Alter => "ALTER",
+            Self::Create => "CREATE",
+            Self::Replace => "REPLACE",
+            Self::Merge => "MERGE",
+        }
+    }
+
+    fn delete_confirmation_kind(self) -> Option<DeleteOperationKind> {
+        match self {
+            Self::Delete => Some(DeleteOperationKind::Delete),
+            Self::Drop => Some(DeleteOperationKind::Drop),
+            Self::Truncate => Some(DeleteOperationKind::Truncate),
+            _ => None,
+        }
+    }
+}
+
 struct RowInspectorState {
     selected_field: usize,
     detail_scroll: usize,
@@ -485,6 +524,7 @@ impl WorkspaceApp {
                 name: bootstrap.name,
                 connection_label: app.connection_label().to_string(),
                 kind: driver.kind(),
+                read_only: false,
                 worker: SessionWorker::spawn(driver),
                 app,
                 expanded: true,
@@ -892,6 +932,9 @@ impl WorkspaceApp {
             selected_connection_label: self.selected_connection_label(),
             selected_database_name: self.selected_database_name(),
             selected_connection_kind: self.selected_connection_kind(),
+            selected_connection_read_only: selected_session
+                .map(|session| session.read_only)
+                .unwrap_or(false),
             selected_connection_busy: selected_session
                 .map(|session| session.pending.is_busy())
                 .unwrap_or(false),
@@ -1325,6 +1368,25 @@ impl WorkspaceApp {
     pub fn selected_connection_kind(&self) -> Option<DatabaseKind> {
         let index = self.selected_connection_index()?;
         Some(self.sessions.get(index)?.kind)
+    }
+
+    pub fn set_connection_read_only(
+        &mut self,
+        connection_index: usize,
+        read_only: bool,
+    ) -> Result<()> {
+        let session = self
+            .sessions
+            .get_mut(connection_index)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        session.read_only = read_only;
+        Ok(())
+    }
+
+    pub fn connection_read_only(&self, connection_index: usize) -> Option<bool> {
+        self.sessions
+            .get(connection_index)
+            .map(|session| session.read_only)
     }
 
     pub fn selected_session_status(&self) -> Option<&str> {
@@ -2606,12 +2668,57 @@ impl WorkspaceApp {
         sql: String,
         status: Option<&str>,
     ) -> Result<()> {
+        if let Some(kind) = self.read_only_write_operation(connection_index, &sql)? {
+            self.report_blocked_read_only_operation(connection_index, kind);
+            return Ok(());
+        }
+
         if let Some(kind) = delete_operation_kind(&sql) {
             self.prompt_delete_operation(connection_index, sql, status.map(str::to_string), kind)?;
             return Ok(());
         }
 
         self.execute_sql_on_connection(connection_index, sql, status)
+    }
+
+    fn read_only_write_operation(
+        &self,
+        connection_index: usize,
+        sql: &str,
+    ) -> Result<Option<WriteOperationKind>> {
+        let session = self
+            .sessions
+            .get(connection_index)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        if !session.read_only {
+            return Ok(None);
+        }
+        Ok(write_operation_kind(sql))
+    }
+
+    fn report_blocked_read_only_operation(
+        &mut self,
+        connection_index: usize,
+        kind: WriteOperationKind,
+    ) {
+        let connection_name = self
+            .sessions
+            .get(connection_index)
+            .map(|session| session.name.clone())
+            .unwrap_or_else(|| "selected connection".to_string());
+        let status = format!(
+            "Blocked {} on read-only connection `{connection_name}`.",
+            kind.label()
+        );
+        self.workspace_status = Some(status.clone());
+
+        if let Some(editor) = self.editor.as_mut() {
+            for tab in &mut editor.tabs {
+                if tab.connection_index == connection_index {
+                    tab.status = Some(status.clone());
+                }
+            }
+        }
     }
 
     fn prompt_delete_operation(
@@ -4153,6 +4260,10 @@ fn loading_preview_message(object: &DbObjectRef) -> String {
 }
 
 fn delete_operation_kind(sql: &str) -> Option<DeleteOperationKind> {
+    write_operation_kind(sql).and_then(WriteOperationKind::delete_confirmation_kind)
+}
+
+fn write_operation_kind(sql: &str) -> Option<WriteOperationKind> {
     let tokens = sql_keyword_tokens(sql);
     if tokens.is_empty() {
         return None;
@@ -4160,23 +4271,41 @@ fn delete_operation_kind(sql: &str) -> Option<DeleteOperationKind> {
 
     if tokens.first().is_some_and(|token| token == "EXPLAIN") {
         if tokens.iter().any(|token| token == "ANALYZE") {
-            return destructive_keyword_in(&tokens[1..]);
+            return write_keyword_in(&tokens[1..]);
         }
         return None;
     }
 
-    destructive_keyword_in(&tokens)
+    write_keyword_in(&tokens)
 }
 
-fn destructive_keyword_in(tokens: &[String]) -> Option<DeleteOperationKind> {
+fn write_keyword_in(tokens: &[String]) -> Option<WriteOperationKind> {
+    if tokens.iter().any(|token| token == "INSERT") {
+        return Some(WriteOperationKind::Insert);
+    }
+    if tokens.iter().any(|token| token == "UPDATE") {
+        return Some(WriteOperationKind::Update);
+    }
     if tokens.iter().any(|token| token == "DELETE") {
-        return Some(DeleteOperationKind::Delete);
+        return Some(WriteOperationKind::Delete);
     }
     if tokens.iter().any(|token| token == "DROP") {
-        return Some(DeleteOperationKind::Drop);
+        return Some(WriteOperationKind::Drop);
     }
     if tokens.iter().any(|token| token == "TRUNCATE") {
-        return Some(DeleteOperationKind::Truncate);
+        return Some(WriteOperationKind::Truncate);
+    }
+    if tokens.iter().any(|token| token == "ALTER") {
+        return Some(WriteOperationKind::Alter);
+    }
+    if tokens.iter().any(|token| token == "CREATE") {
+        return Some(WriteOperationKind::Create);
+    }
+    if tokens.iter().any(|token| token == "REPLACE") {
+        return Some(WriteOperationKind::Replace);
+    }
+    if tokens.iter().any(|token| token == "MERGE") {
+        return Some(WriteOperationKind::Merge);
     }
     None
 }
@@ -4422,5 +4551,55 @@ mod tests {
             None
         );
         assert_eq!(delete_operation_kind("explain delete from users"), None);
+    }
+
+    #[test]
+    fn write_operation_detector_covers_mutating_sql() {
+        assert_eq!(
+            write_operation_kind("insert into users(id) values (1)"),
+            Some(WriteOperationKind::Insert)
+        );
+        assert_eq!(
+            write_operation_kind("update users set email = 'alice@example.com'"),
+            Some(WriteOperationKind::Update)
+        );
+        assert_eq!(
+            write_operation_kind("create table audit_log(id integer)"),
+            Some(WriteOperationKind::Create)
+        );
+        assert_eq!(
+            write_operation_kind("alter table users add column last_seen timestamptz"),
+            Some(WriteOperationKind::Alter)
+        );
+        assert_eq!(
+            write_operation_kind("replace into users(id) values (1)"),
+            Some(WriteOperationKind::Replace)
+        );
+        assert_eq!(
+            write_operation_kind(
+                "merge into users using staging_users on users.id = staging_users.id"
+            ),
+            Some(WriteOperationKind::Merge)
+        );
+        assert_eq!(
+            write_operation_kind("explain analyze update users set email = 'alice@example.com'"),
+            Some(WriteOperationKind::Update)
+        );
+    }
+
+    #[test]
+    fn write_operation_detector_ignores_read_only_safe_mentions() {
+        assert_eq!(
+            write_operation_kind("select 'update users set email = 1'"),
+            None
+        );
+        assert_eq!(
+            write_operation_kind("/* create table users */\nselect 1"),
+            None
+        );
+        assert_eq!(
+            write_operation_kind("explain update users set email = 'alice@example.com'"),
+            None
+        );
     }
 }

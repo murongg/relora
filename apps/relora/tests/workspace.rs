@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex, mpsc},
     thread,
     time::Duration,
@@ -12,6 +12,9 @@ use relora_core::db::{
     Catalog, DatabaseDriver, DatabaseEntry, DatabaseKind, DbColumn, DbObjectKind, DbObjectRef,
     QueryResult, SchemaEntry, SqlExecutionResult, TablePreview,
 };
+
+const BACKGROUND_WAIT_ATTEMPTS: usize = 200;
+const BACKGROUND_WAIT_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug)]
 struct MockDriver {
@@ -66,6 +69,23 @@ struct BlockingPreviewDriver {
     preview_calls: usize,
 }
 
+#[derive(Debug)]
+struct BlockingCatalogDriver {
+    catalogs: VecDeque<Catalog>,
+    previews: VecDeque<TablePreview>,
+    columns: VecDeque<Vec<DbColumn>>,
+    unblock_catalog: Option<mpsc::Receiver<()>>,
+    catalog_calls: usize,
+}
+
+struct TargetedBlockingDriver {
+    catalogs: VecDeque<Catalog>,
+    previews: BTreeMap<String, TablePreview>,
+    columns: BTreeMap<String, Vec<DbColumn>>,
+    unblock_preview_for: Option<(String, mpsc::Receiver<()>)>,
+    unblock_structure_for: Option<(String, mpsc::Receiver<()>)>,
+}
+
 impl BlockingPreviewDriver {
     fn new(
         catalogs: Vec<Catalog>,
@@ -78,6 +98,55 @@ impl BlockingPreviewDriver {
             unblock_preview: Some(unblock_preview),
             preview_calls: 0,
         }
+    }
+}
+
+impl BlockingCatalogDriver {
+    fn new(
+        catalogs: Vec<Catalog>,
+        previews: Vec<TablePreview>,
+        columns: Vec<Vec<DbColumn>>,
+        unblock_catalog: mpsc::Receiver<()>,
+    ) -> Self {
+        Self {
+            catalogs: VecDeque::from(catalogs),
+            previews: VecDeque::from(previews),
+            columns: VecDeque::from(columns),
+            unblock_catalog: Some(unblock_catalog),
+            catalog_calls: 0,
+        }
+    }
+}
+
+impl TargetedBlockingDriver {
+    fn new(
+        catalogs: Vec<Catalog>,
+        previews: &[(&str, TablePreview)],
+        columns: &[(&str, Vec<DbColumn>)],
+    ) -> Self {
+        Self {
+            catalogs: VecDeque::from(catalogs),
+            previews: previews
+                .iter()
+                .map(|(name, preview)| ((*name).to_string(), preview.clone()))
+                .collect(),
+            columns: columns
+                .iter()
+                .map(|(name, values)| ((*name).to_string(), values.clone()))
+                .collect(),
+            unblock_preview_for: None,
+            unblock_structure_for: None,
+        }
+    }
+
+    fn with_blocked_preview(mut self, object: &str, receiver: mpsc::Receiver<()>) -> Self {
+        self.unblock_preview_for = Some((object.to_string(), receiver));
+        self
+    }
+
+    fn with_blocked_structure(mut self, object: &str, receiver: mpsc::Receiver<()>) -> Self {
+        self.unblock_structure_for = Some((object.to_string(), receiver));
+        self
     }
 }
 
@@ -198,6 +267,143 @@ impl DatabaseDriver for BlockingPreviewDriver {
     }
 }
 
+impl DatabaseDriver for BlockingCatalogDriver {
+    fn kind(&self) -> DatabaseKind {
+        DatabaseKind::Postgres
+    }
+
+    fn connection_label(&self) -> &str {
+        "mock://postgres"
+    }
+
+    fn load_catalog(&mut self) -> Result<Catalog> {
+        self.catalog_calls += 1;
+        if self.catalog_calls > 1 {
+            if let Some(receiver) = self.unblock_catalog.take() {
+                receiver
+                    .recv()
+                    .map_err(|_| anyhow::anyhow!("catalog unblock signal was dropped"))?;
+            }
+        }
+
+        self.catalogs
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
+    }
+
+    fn load_preview_page(
+        &mut self,
+        _table: &DbObjectRef,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<TablePreview> {
+        self.previews
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("missing mocked preview"))
+    }
+
+    fn load_filtered_preview_page(
+        &mut self,
+        table: &DbObjectRef,
+        _filter: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<TablePreview> {
+        self.load_preview_page(table, limit, offset)
+    }
+
+    fn load_object_columns(&mut self, _table: &DbObjectRef) -> Result<Vec<DbColumn>> {
+        self.columns
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("missing mocked columns"))
+    }
+
+    fn execute_sql(
+        &mut self,
+        _database: Option<&str>,
+        _sql: &str,
+    ) -> Result<Vec<SqlExecutionResult>> {
+        Err(anyhow::anyhow!("sql execution is not used in this test"))
+    }
+}
+
+impl DatabaseDriver for TargetedBlockingDriver {
+    fn kind(&self) -> DatabaseKind {
+        DatabaseKind::Postgres
+    }
+
+    fn connection_label(&self) -> &str {
+        "mock://postgres"
+    }
+
+    fn load_catalog(&mut self) -> Result<Catalog> {
+        self.catalogs
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("missing mocked catalog"))
+    }
+
+    fn load_preview_page(
+        &mut self,
+        table: &DbObjectRef,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<TablePreview> {
+        if self
+            .unblock_preview_for
+            .as_ref()
+            .is_some_and(|(name, _)| name == &table.name)
+        {
+            if let Some((_, receiver)) = self.unblock_preview_for.take() {
+                receiver
+                    .recv()
+                    .map_err(|_| anyhow::anyhow!("preview unblock signal was dropped"))?;
+            }
+        }
+
+        self.previews
+            .get(&table.name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing mocked preview for {}", table.name))
+    }
+
+    fn load_filtered_preview_page(
+        &mut self,
+        table: &DbObjectRef,
+        _filter: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<TablePreview> {
+        self.load_preview_page(table, limit, offset)
+    }
+
+    fn load_object_columns(&mut self, table: &DbObjectRef) -> Result<Vec<DbColumn>> {
+        if self
+            .unblock_structure_for
+            .as_ref()
+            .is_some_and(|(name, _)| name == &table.name)
+        {
+            if let Some((_, receiver)) = self.unblock_structure_for.take() {
+                receiver
+                    .recv()
+                    .map_err(|_| anyhow::anyhow!("structure unblock signal was dropped"))?;
+            }
+        }
+
+        self.columns
+            .get(&table.name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing mocked columns for {}", table.name))
+    }
+
+    fn execute_sql(
+        &mut self,
+        _database: Option<&str>,
+        _sql: &str,
+    ) -> Result<Vec<SqlExecutionResult>> {
+        Err(anyhow::anyhow!("sql execution is not used in this test"))
+    }
+}
+
 fn catalog(schema: &str, objects: &[(DbObjectKind, &str)]) -> Catalog {
     Catalog {
         databases: vec![DatabaseEntry {
@@ -259,15 +465,60 @@ fn query_batch(items: Vec<SqlExecutionResult>) -> Vec<SqlExecutionResult> {
 }
 
 fn drain_until_idle(workspace: &mut WorkspaceApp) -> Result<()> {
-    for _ in 0..50 {
+    for _ in 0..BACKGROUND_WAIT_ATTEMPTS {
         workspace.drain_background()?;
         if !workspace.has_pending_tasks() {
             return Ok(());
         }
-        thread::sleep(Duration::from_millis(10));
+        thread::sleep(BACKGROUND_WAIT_INTERVAL);
     }
 
     Err(anyhow::anyhow!("workspace did not become idle in time"))
+}
+
+fn drain_until_structure_loaded(workspace: &mut WorkspaceApp, object_name: &str) -> Result<()> {
+    for _ in 0..BACKGROUND_WAIT_ATTEMPTS {
+        workspace.drain_background()?;
+        if let Some(structure) = workspace.view().structure {
+            if !structure.loading
+                && structure
+                    .object
+                    .is_some_and(|object| object.name == object_name)
+            {
+                return Ok(());
+            }
+        }
+        thread::sleep(BACKGROUND_WAIT_INTERVAL);
+    }
+
+    Err(anyhow::anyhow!(
+        "structure for {object_name} did not become visible in time"
+    ))
+}
+
+fn drain_until<F>(workspace: &mut WorkspaceApp, predicate: F, waiting_for: &str) -> Result<()>
+where
+    F: Fn(&WorkspaceApp) -> bool,
+{
+    for _ in 0..BACKGROUND_WAIT_ATTEMPTS {
+        workspace.drain_background()?;
+        if predicate(workspace) {
+            return Ok(());
+        }
+        thread::sleep(BACKGROUND_WAIT_INTERVAL);
+    }
+
+    Err(anyhow::anyhow!(
+        "{waiting_for} did not become visible in time"
+    ))
+}
+
+fn tree_row_index(workspace: &WorkspaceApp, label: &str) -> usize {
+    workspace
+        .tree_rows()
+        .iter()
+        .position(|row| row.label == label)
+        .unwrap_or_else(|| panic!("tree row {label} should exist"))
 }
 
 #[test]
@@ -640,6 +891,45 @@ fn workspace_requires_confirmation_before_executing_delete_sql() -> Result<()> {
 }
 
 #[test]
+fn workspace_blocks_write_sql_on_read_only_connections() -> Result<()> {
+    let executed_sql = Arc::new(Mutex::new(Vec::new()));
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(
+            MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+                vec![],
+                vec![query_batch(vec![query(&["updated"], &[&["1"]])])],
+            )
+            .with_sql_recorder(executed_sql.clone()),
+        ),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.set_connection_read_only(0, true)?;
+    workspace.apply_action(WorkspaceAction::OpenSqlEditor)?;
+    workspace.set_editor_sql("UPDATE users SET email = 'bob@example.com' WHERE id = 1;")?;
+    workspace.apply_action(WorkspaceAction::ExecuteEditor)?;
+
+    assert!(workspace.view().delete_confirmation.is_none());
+    assert!(
+        workspace
+            .editor_status()
+            .expect("read-only rejection should report an editor status")
+            .contains("read-only")
+    );
+    assert!(
+        executed_sql
+            .lock()
+            .expect("sql recorder lock should be available")
+            .is_empty(),
+        "write SQL must not execute against a read-only connection"
+    );
+    Ok(())
+}
+
+#[test]
 fn workspace_executes_only_the_statement_under_the_editor_cursor() -> Result<()> {
     let executed_sql = Arc::new(Mutex::new(Vec::new()));
     let bootstraps = vec![ConnectionBootstrap {
@@ -717,6 +1007,106 @@ fn workspace_searches_and_reruns_sql_history() -> Result<()> {
         .lock()
         .expect("sql recorder lock should be available");
     assert_eq!(recorded.last().map(String::as_str), Some("select 2;"));
+    Ok(())
+}
+
+#[test]
+fn workspace_preserves_data_filter_and_browser_state_across_sql_workflows() -> Result<()> {
+    let executed_sql = Arc::new(Mutex::new(Vec::new()));
+    let sql = "select 1 as id;\nselect 'ok' as status;";
+    let current_statement = "select 'ok' as status;";
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(
+            MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(
+                    &["id", "email", "status"],
+                    &[
+                        &["1", "alice@example.com", "active"],
+                        &["2", "bob@example.com", "pending"],
+                        &["3", "carol@example.com", "disabled"],
+                    ],
+                )],
+                vec![],
+                vec![
+                    query_batch(vec![
+                        query(&["id"], &[&["1"]]),
+                        query(&["status"], &[&["ok"]]),
+                    ]),
+                    query_batch(vec![query(&["rerun"], &[&["history"]])]),
+                ],
+            )
+            .with_filtered_previews(vec![preview(
+                &["id", "email", "status"],
+                &[&["2", "bob@example.com", "pending"]],
+            )])
+            .with_sql_recorder(executed_sql.clone()),
+        ),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::FocusDataGrid)?;
+    workspace.apply_action(WorkspaceAction::OpenDataFilter)?;
+    workspace.insert_data_filter_char('b')?;
+    workspace.insert_data_filter_char('o')?;
+    workspace.insert_data_filter_char('b')?;
+    workspace.apply_action(WorkspaceAction::ApplyDataFilter)?;
+    drain_until_idle(&mut workspace)?;
+
+    assert_eq!(workspace.active_data_filter(), Some("bob"));
+    assert_eq!(workspace.active_preview().rows.len(), 1);
+    assert_eq!(workspace.active_preview().rows[0][1], "bob@example.com");
+
+    workspace.apply_action(WorkspaceAction::OpenRowInspector)?;
+    let inspector = workspace
+        .view()
+        .row_inspector
+        .expect("row inspector should open for the filtered row");
+    assert_eq!(inspector.values[1], "bob@example.com");
+    workspace.apply_action(WorkspaceAction::CloseRowInspector)?;
+    assert!(workspace.view().row_inspector.is_none());
+
+    workspace.apply_action(WorkspaceAction::OpenSqlEditor)?;
+    workspace.set_editor_sql(sql)?;
+    workspace.apply_action(WorkspaceAction::ExecuteEditor)?;
+    drain_until_idle(&mut workspace)?;
+
+    assert_eq!(workspace.active_right_tab(), RightPaneTab::Sql);
+    assert_eq!(workspace.editor_result_set_count(), 2);
+    assert_eq!(workspace.active_grid().columns, vec!["id"]);
+    assert_eq!(workspace.active_grid().rows[0][0], "1");
+
+    workspace.apply_action(WorkspaceAction::NextResultSet)?;
+    assert_eq!(workspace.active_grid().columns, vec!["status"]);
+    assert_eq!(workspace.active_grid().rows[0][0], "ok");
+
+    workspace.apply_action(WorkspaceAction::OpenSqlHistory)?;
+    let history = workspace
+        .view()
+        .sql_history
+        .expect("sql history should open from the SQL workflow");
+    assert_eq!(history.items[0], current_statement);
+
+    workspace.apply_action(WorkspaceAction::RunSqlHistorySelection)?;
+    drain_until_idle(&mut workspace)?;
+
+    assert_eq!(
+        executed_sql
+            .lock()
+            .expect("sql recorder lock should be available")
+            .last()
+            .map(String::as_str),
+        Some(current_statement)
+    );
+    assert_eq!(workspace.active_grid().columns, vec!["rerun"]);
+    assert_eq!(workspace.active_grid().rows[0][0], "history");
+
+    workspace.apply_action(WorkspaceAction::SelectRightDataTab)?;
+    assert_eq!(workspace.active_right_tab(), RightPaneTab::Data);
+    assert_eq!(workspace.active_data_filter(), Some("bob"));
+    assert_eq!(workspace.active_preview().rows.len(), 1);
+    assert_eq!(workspace.active_preview().rows[0][1], "bob@example.com");
     Ok(())
 }
 
@@ -1167,6 +1557,53 @@ fn workspace_stages_cell_update_preview_sql_then_commits_transaction() -> Result
 }
 
 #[test]
+fn workspace_blocks_staged_crud_commit_on_read_only_connections() -> Result<()> {
+    let executed_sql = Arc::new(Mutex::new(Vec::new()));
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(
+            MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id", "email"], &[&["1", "alice@example.com"]])],
+                vec![],
+                vec![query_batch(vec![query(
+                    &["id", "email"],
+                    &[&["1", "new@example.com"]],
+                )])],
+            )
+            .with_sql_recorder(executed_sql.clone()),
+        ),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.set_connection_read_only(0, true)?;
+    workspace.apply_action(WorkspaceAction::FocusDataGrid)?;
+    workspace.apply_action(WorkspaceAction::ScrollDataGridRight)?;
+    workspace.apply_action(WorkspaceAction::StartCellEdit)?;
+    workspace.clear_cell_edit_input()?;
+    for ch in "new@example.com".chars() {
+        workspace.insert_cell_edit_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::PreviewStagedCrud)?;
+    workspace.apply_action(WorkspaceAction::CommitStagedCrud)?;
+
+    assert!(
+        workspace
+            .editor_status()
+            .expect("read-only rejection should report an editor status")
+            .contains("read-only")
+    );
+    assert!(
+        executed_sql
+            .lock()
+            .expect("sql recorder lock should be available")
+            .is_empty(),
+        "staged CRUD must not commit against a read-only connection"
+    );
+    Ok(())
+}
+
+#[test]
 fn workspace_scrolls_data_grid_without_moving_asset_selection() -> Result<()> {
     let bootstraps = vec![ConnectionBootstrap {
         name: "pg".to_string(),
@@ -1533,6 +1970,59 @@ fn workspace_loads_object_preview_in_background_and_applies_it_on_drain() -> Res
 }
 
 #[test]
+fn workspace_switching_objects_ignores_stale_preview_from_previous_selection() -> Result<()> {
+    let (unblock_preview_tx, unblock_preview_rx) = mpsc::channel();
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(
+            TargetedBlockingDriver::new(
+                vec![catalog(
+                    "public",
+                    &[
+                        (DbObjectKind::Table, "users"),
+                        (DbObjectKind::Table, "events"),
+                        (DbObjectKind::Table, "orders"),
+                    ],
+                )],
+                &[
+                    ("users", preview(&["id"], &[&["1"]])),
+                    ("events", preview(&["event_id"], &[&["evt_1"]])),
+                    ("orders", preview(&["order_id"], &[&["ord_1"]])),
+                ],
+                &[],
+            )
+            .with_blocked_preview("events", unblock_preview_rx),
+        ),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    let events_index = tree_row_index(&workspace, "events");
+    let orders_index = tree_row_index(&workspace, "orders");
+    workspace.select_tree_row_index(events_index)?;
+    workspace.select_tree_row_index(orders_index)?;
+
+    assert_eq!(workspace.selected_row().label, "orders");
+    assert!(workspace.has_pending_tasks());
+    assert!(workspace.active_preview().columns.is_empty());
+    assert!(
+        workspace
+            .selected_session_status()
+            .expect("loading status should be present while switching previews")
+            .contains("Loading preview")
+    );
+
+    unblock_preview_tx
+        .send(())
+        .expect("preview worker should still be waiting");
+    drain_until_idle(&mut workspace)?;
+
+    assert_eq!(workspace.selected_row().label, "orders");
+    assert_eq!(workspace.active_preview().columns, vec!["order_id"]);
+    assert_eq!(workspace.active_preview().rows[0][0], "ord_1");
+    Ok(())
+}
+
+#[test]
 fn workspace_can_cancel_selected_connection_tasks_and_ignore_late_preview() -> Result<()> {
     let (unblock_preview_tx, unblock_preview_rx) = mpsc::channel();
     let bootstraps = vec![
@@ -1583,6 +2073,465 @@ fn workspace_can_cancel_selected_connection_tasks_and_ignore_late_preview() -> R
     }
 
     assert!(workspace.active_preview().columns.is_empty());
+    Ok(())
+}
+
+#[test]
+fn workspace_structure_tab_applies_only_the_latest_object_after_switching_selection() -> Result<()>
+{
+    let (unblock_structure_tx, unblock_structure_rx) = mpsc::channel();
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(
+            TargetedBlockingDriver::new(
+                vec![catalog(
+                    "public",
+                    &[
+                        (DbObjectKind::Table, "users"),
+                        (DbObjectKind::Table, "events"),
+                        (DbObjectKind::Table, "orders"),
+                    ],
+                )],
+                &[
+                    ("users", preview(&["id"], &[&["1"]])),
+                    ("events", preview(&["event_id"], &[&["evt_1"]])),
+                    ("orders", preview(&["order_id"], &[&["ord_1"]])),
+                ],
+                &[
+                    ("users", columns(&[("id", "integer", false, true, true)])),
+                    (
+                        "events",
+                        columns(&[("event_id", "text", false, false, true)]),
+                    ),
+                    (
+                        "orders",
+                        columns(&[("order_id", "text", false, false, true)]),
+                    ),
+                ],
+            )
+            .with_blocked_structure("events", unblock_structure_rx),
+        ),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut workspace, "users")?;
+
+    let events_index = tree_row_index(&workspace, "events");
+    let orders_index = tree_row_index(&workspace, "orders");
+    workspace.select_tree_row_index(events_index)?;
+    workspace.select_tree_row_index(orders_index)?;
+
+    let structure = workspace
+        .view()
+        .structure
+        .expect("structure view should remain open while switching objects");
+    assert!(structure.loading);
+    assert_eq!(
+        structure
+            .object
+            .expect("a target object should remain selected while loading")
+            .name,
+        "orders"
+    );
+
+    unblock_structure_tx
+        .send(())
+        .expect("structure worker should still be waiting");
+    drain_until_idle(&mut workspace)?;
+
+    let structure = workspace
+        .view()
+        .structure
+        .expect("structure view should be available after loading");
+    assert!(!structure.loading);
+    assert_eq!(
+        structure
+            .object
+            .expect("structure should target the latest selected object")
+            .name,
+        "orders"
+    );
+    assert_eq!(structure.columns.len(), 1);
+    assert_eq!(structure.columns[0].name, "order_id");
+    assert_eq!(workspace.active_preview().columns, vec!["order_id"]);
+    assert_eq!(workspace.active_preview().rows[0][0], "ord_1");
+    Ok(())
+}
+
+#[test]
+fn workspace_refresh_preserves_active_filter_and_reloads_filtered_preview() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(
+            MockDriver::new(
+                vec![
+                    catalog("public", &[(DbObjectKind::Table, "users")]),
+                    catalog(
+                        "public",
+                        &[
+                            (DbObjectKind::Table, "users"),
+                            (DbObjectKind::Table, "user_audits"),
+                        ],
+                    ),
+                ],
+                vec![preview(
+                    &["id", "email", "status"],
+                    &[
+                        &["1", "alice@example.com", "active"],
+                        &["2", "bob@example.com", "pending"],
+                        &["3", "carol@example.com", "disabled"],
+                    ],
+                )],
+                vec![],
+                vec![],
+            )
+            .with_filtered_previews(vec![
+                preview(
+                    &["id", "email", "status"],
+                    &[&["2", "bob@example.com", "pending"]],
+                ),
+                preview(
+                    &["id", "email", "status"],
+                    &[&["2", "bob@example.com", "refreshed"]],
+                ),
+            ]),
+        ),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::FocusDataGrid)?;
+    workspace.apply_action(WorkspaceAction::OpenDataFilter)?;
+    workspace.insert_data_filter_char('b')?;
+    workspace.insert_data_filter_char('o')?;
+    workspace.insert_data_filter_char('b')?;
+    workspace.apply_action(WorkspaceAction::ApplyDataFilter)?;
+    drain_until_idle(&mut workspace)?;
+
+    assert_eq!(workspace.active_data_filter(), Some("bob"));
+    assert_eq!(workspace.active_preview().rows[0][2], "pending");
+
+    workspace.apply_action(WorkspaceAction::Refresh)?;
+    drain_until(
+        &mut workspace,
+        |workspace| {
+            workspace.active_data_filter() == Some("bob")
+                && workspace.active_preview().rows.len() == 1
+                && workspace.active_preview().rows[0][2] == "refreshed"
+        },
+        "the refreshed filtered preview",
+    )?;
+    drain_until_idle(&mut workspace)?;
+
+    assert_eq!(workspace.active_data_filter(), Some("bob"));
+    assert_eq!(workspace.active_preview().rows.len(), 1);
+    assert_eq!(workspace.active_preview().rows[0][1], "bob@example.com");
+    assert_eq!(workspace.active_preview().rows[0][2], "refreshed");
+    let labels = workspace
+        .tree_rows()
+        .iter()
+        .map(|row| row.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(labels.contains(&"user_audits"));
+    Ok(())
+}
+
+#[test]
+fn workspace_refresh_reloads_structure_when_structure_tab_is_visible() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![
+                catalog("public", &[(DbObjectKind::Table, "users")]),
+                catalog("public", &[(DbObjectKind::Table, "users")]),
+            ],
+            vec![
+                preview(&["id", "email"], &[&["1", "alice@example.com"]]),
+                preview(
+                    &["id", "email", "display_name"],
+                    &[&["1", "alice@example.com", "Alice"]],
+                ),
+            ],
+            vec![
+                columns(&[("id", "integer", false, true, true)]),
+                columns(&[
+                    ("id", "integer", false, true, true),
+                    ("display_name", "text", true, false, false),
+                ]),
+            ],
+            vec![],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut workspace, "users")?;
+
+    let initial_structure = workspace
+        .view()
+        .structure
+        .expect("structure should be visible before refresh");
+    assert_eq!(initial_structure.columns.len(), 1);
+    assert_eq!(initial_structure.columns[0].name, "id");
+
+    workspace.apply_action(WorkspaceAction::Refresh)?;
+    drain_until(
+        &mut workspace,
+        |workspace| {
+            workspace.view().structure.is_some_and(|structure| {
+                !structure.loading
+                    && structure
+                        .object
+                        .is_some_and(|object| object.name == "users")
+                    && structure.columns.len() == 2
+                    && structure.columns[1].name == "display_name"
+            }) && workspace.active_preview().columns == vec!["id", "email", "display_name"]
+        },
+        "the refreshed structure view",
+    )?;
+    drain_until_idle(&mut workspace)?;
+
+    let refreshed_structure = workspace
+        .view()
+        .structure
+        .expect("structure should still be visible after refresh");
+    assert!(!refreshed_structure.loading);
+    assert_eq!(
+        refreshed_structure
+            .object
+            .expect("refreshed structure should still target users")
+            .name,
+        "users"
+    );
+    assert_eq!(refreshed_structure.columns.len(), 2);
+    assert_eq!(refreshed_structure.columns[1].name, "display_name");
+    assert_eq!(
+        workspace.active_preview().columns,
+        vec!["id", "email", "display_name"]
+    );
+    assert_eq!(workspace.active_preview().rows[0][2], "Alice");
+    Ok(())
+}
+
+#[test]
+fn workspace_refresh_applies_preview_for_the_latest_selection_after_switching_objects() -> Result<()>
+{
+    let (unblock_catalog_tx, unblock_catalog_rx) = mpsc::channel();
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(BlockingCatalogDriver::new(
+            vec![
+                catalog(
+                    "public",
+                    &[
+                        (DbObjectKind::Table, "users"),
+                        (DbObjectKind::Table, "orders"),
+                    ],
+                ),
+                catalog(
+                    "public",
+                    &[
+                        (DbObjectKind::Table, "users"),
+                        (DbObjectKind::Table, "orders"),
+                        (DbObjectKind::Table, "user_audits"),
+                    ],
+                ),
+            ],
+            vec![
+                preview(&["id", "status"], &[&["1", "initial-user"]]),
+                preview(&["id", "status"], &[&["1", "refreshed-user"]]),
+                preview(&["id", "status"], &[&["101", "latest-order"]]),
+            ],
+            vec![],
+            unblock_catalog_rx,
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    assert_eq!(workspace.selected_row().label, "users");
+    workspace.apply_action(WorkspaceAction::Refresh)?;
+
+    let orders_index = tree_row_index(&workspace, "orders");
+    workspace.select_tree_row_index(orders_index)?;
+    assert_eq!(workspace.selected_row().label, "orders");
+    assert!(workspace.has_pending_tasks());
+
+    unblock_catalog_tx
+        .send(())
+        .expect("refresh worker should still be waiting");
+    drain_until(
+        &mut workspace,
+        |workspace| {
+            workspace.selected_row().label == "orders"
+                && workspace.active_preview().rows.len() == 1
+                && workspace.active_preview().rows[0][1] == "latest-order"
+                && workspace
+                    .tree_rows()
+                    .iter()
+                    .any(|row| row.label == "user_audits")
+        },
+        "the refreshed latest-object preview",
+    )?;
+    drain_until_idle(&mut workspace)?;
+
+    assert_eq!(workspace.selected_row().label, "orders");
+    assert_eq!(workspace.active_preview().columns, vec!["id", "status"]);
+    assert_eq!(workspace.active_preview().rows[0][0], "101");
+    assert_eq!(workspace.active_preview().rows[0][1], "latest-order");
+    Ok(())
+}
+
+#[test]
+fn workspace_refresh_reloads_structure_for_the_latest_selection_after_switching_objects()
+-> Result<()> {
+    let (unblock_catalog_tx, unblock_catalog_rx) = mpsc::channel();
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(BlockingCatalogDriver::new(
+            vec![
+                catalog(
+                    "public",
+                    &[
+                        (DbObjectKind::Table, "users"),
+                        (DbObjectKind::Table, "orders"),
+                    ],
+                ),
+                catalog(
+                    "public",
+                    &[
+                        (DbObjectKind::Table, "users"),
+                        (DbObjectKind::Table, "orders"),
+                        (DbObjectKind::Table, "user_audits"),
+                    ],
+                ),
+            ],
+            vec![
+                preview(&["id", "email"], &[&["1", "alice@example.com"]]),
+                preview(&["id", "email"], &[&["1", "ignored-refresh-user"]]),
+                preview(
+                    &["id", "order_number", "status"],
+                    &[&["101", "SO-101", "ready"]],
+                ),
+            ],
+            vec![
+                columns(&[("id", "integer", false, true, true)]),
+                columns(&[
+                    ("id", "integer", false, true, true),
+                    ("order_number", "text", false, false, false),
+                    ("status", "text", false, false, false),
+                ]),
+            ],
+            unblock_catalog_rx,
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut workspace, "users")?;
+
+    workspace.apply_action(WorkspaceAction::Refresh)?;
+    let orders_index = tree_row_index(&workspace, "orders");
+    workspace.select_tree_row_index(orders_index)?;
+    assert_eq!(workspace.selected_row().label, "orders");
+
+    unblock_catalog_tx
+        .send(())
+        .expect("refresh worker should still be waiting");
+    drain_until(
+        &mut workspace,
+        |workspace| {
+            workspace.view().structure.is_some_and(|structure| {
+                !structure.loading
+                    && structure
+                        .object
+                        .is_some_and(|object| object.name == "orders")
+                    && structure.columns.len() == 3
+                    && structure.columns[1].name == "order_number"
+            }) && workspace.active_preview().rows.len() == 1
+                && workspace.active_preview().rows[0][1] == "SO-101"
+        },
+        "the refreshed latest-object structure",
+    )?;
+    drain_until_idle(&mut workspace)?;
+
+    let structure = workspace
+        .view()
+        .structure
+        .expect("structure should remain open after refresh");
+    assert_eq!(
+        structure
+            .object
+            .expect("refreshed structure should target the latest object")
+            .name,
+        "orders"
+    );
+    assert_eq!(structure.columns.len(), 3);
+    assert_eq!(structure.columns[1].name, "order_number");
+    assert_eq!(
+        workspace.active_preview().columns,
+        vec!["id", "order_number", "status"]
+    );
+    assert_eq!(workspace.active_preview().rows[0][1], "SO-101");
+    Ok(())
+}
+
+#[test]
+fn workspace_canceling_refresh_ignores_late_catalog_and_preview_results() -> Result<()> {
+    let (unblock_catalog_tx, unblock_catalog_rx) = mpsc::channel();
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(BlockingCatalogDriver::new(
+            vec![
+                catalog("public", &[(DbObjectKind::Table, "users")]),
+                catalog(
+                    "public",
+                    &[
+                        (DbObjectKind::Table, "users"),
+                        (DbObjectKind::Table, "user_audits"),
+                    ],
+                ),
+            ],
+            vec![
+                preview(&["id", "status"], &[&["1", "initial"]]),
+                preview(&["id", "status"], &[&["1", "stale-after-cancel"]]),
+            ],
+            vec![],
+            unblock_catalog_rx,
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    assert_eq!(workspace.selected_row().label, "users");
+    assert_eq!(workspace.active_preview().rows[0][1], "initial");
+
+    workspace.apply_action(WorkspaceAction::Refresh)?;
+    assert!(workspace.has_pending_tasks());
+    workspace.apply_action(WorkspaceAction::CancelTasks)?;
+    assert!(!workspace.has_pending_tasks());
+    assert!(
+        workspace
+            .selected_session_status()
+            .expect("cancel should update the workspace status")
+            .contains("Canceled")
+    );
+
+    unblock_catalog_tx
+        .send(())
+        .expect("refresh worker should still be waiting");
+    for _ in 0..BACKGROUND_WAIT_ATTEMPTS {
+        workspace.drain_background()?;
+        thread::sleep(BACKGROUND_WAIT_INTERVAL);
+    }
+
+    assert_eq!(workspace.selected_row().label, "users");
+    assert_eq!(workspace.active_preview().columns, vec!["id", "status"]);
+    assert_eq!(workspace.active_preview().rows[0][1], "initial");
+    let labels = workspace
+        .tree_rows()
+        .iter()
+        .map(|row| row.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(!labels.contains(&"user_audits"));
     Ok(())
 }
 

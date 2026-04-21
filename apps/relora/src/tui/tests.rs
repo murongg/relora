@@ -238,6 +238,22 @@ fn drain_until_result_visible(app: &mut WorkspaceApp) -> Result<()> {
     ))
 }
 
+fn drain_until<F>(app: &mut WorkspaceApp, predicate: F, waiting_for: &str) -> Result<()>
+where
+    F: Fn(&WorkspaceApp) -> bool,
+{
+    for _ in 0..20 {
+        app.drain_background()?;
+        if predicate(app) {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    Err(anyhow::anyhow!(
+        "{waiting_for} did not become visible in time"
+    ))
+}
+
 fn drain_until_preview_columns(app: &mut WorkspaceApp, columns: &[&str]) -> Result<()> {
     let expected = columns
         .iter()
@@ -842,6 +858,7 @@ fn launcher_screen_renders_saved_connections() -> Result<()> {
         vec![crate::config::ConnectionConfig {
             name: "pg".to_string(),
             url: "postgresql://postgres:postgres@localhost/postgres".to_string(),
+            read_only: true,
         }],
         std::env::temp_dir().join("relora-launcher-render-test.json"),
     );
@@ -865,6 +882,36 @@ fn launcher_screen_renders_saved_connections() -> Result<()> {
     assert!(rendered.contains("Terminal Database Workspace"));
     assert!(rendered.contains("Launch selected"));
     assert!(rendered.contains("pg"));
+    assert!(rendered.contains("read-only"));
+    Ok(())
+}
+
+#[test]
+fn workspace_summary_surfaces_read_only_mode() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("analytics", &[(DbObjectKind::Table, "events")])],
+            vec![preview(&["id"], &[&["1"]])],
+        )),
+    }];
+    let mut app = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    app.set_connection_read_only(0, true)?;
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend)?;
+    terminal.draw(|frame| draw(frame, &AppShell::Workspace(app.into())))?;
+
+    let rendered = (0..terminal.backend().buffer().area.height)
+        .map(|y| {
+            (0..terminal.backend().buffer().area.width)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Mode: read-only"));
     Ok(())
 }
 
@@ -875,14 +922,17 @@ fn launcher_screen_renders_database_badges_per_connection_kind() -> Result<()> {
             crate::config::ConnectionConfig {
                 name: "postgres-main".to_string(),
                 url: "postgresql://postgres:postgres@localhost/postgres".to_string(),
+                read_only: false,
             },
             crate::config::ConnectionConfig {
                 name: "mysql-main".to_string(),
                 url: "mysql://root:secret@localhost/mysql".to_string(),
+                read_only: false,
             },
             crate::config::ConnectionConfig {
                 name: "sqlite-main".to_string(),
                 url: "sqlite:///tmp/relora.db".to_string(),
+                read_only: false,
             },
         ],
         std::env::temp_dir().join("relora-launcher-badges-test.json"),
@@ -979,6 +1029,7 @@ fn launcher_delete_confirmation_renders_as_modal() -> Result<()> {
         vec![crate::config::ConnectionConfig {
             name: "pg".to_string(),
             url: "postgresql://postgres:postgres@localhost/postgres".to_string(),
+            read_only: false,
         }],
         std::env::temp_dir().join("relora-launcher-delete-modal-test.json"),
     );
@@ -1013,10 +1064,12 @@ fn launcher_delete_confirmation_blocks_navigation_until_answered() -> Result<()>
             crate::config::ConnectionConfig {
                 name: "pg".to_string(),
                 url: "postgresql://postgres:postgres@localhost/postgres".to_string(),
+                read_only: false,
             },
             crate::config::ConnectionConfig {
                 name: "analytics".to_string(),
                 url: "postgresql://postgres:postgres@localhost/analytics".to_string(),
+                read_only: false,
             },
         ],
         std::env::temp_dir().join("relora-launcher-delete-input-test.json"),
@@ -1084,6 +1137,7 @@ fn workspace_escape_returns_to_launcher_when_launcher_is_available() -> Result<(
         vec![crate::config::ConnectionConfig {
             name: "pg".to_string(),
             url: "postgresql://postgres@localhost/postgres".to_string(),
+            read_only: false,
         }],
         std::env::temp_dir().join("relora-launcher-return-test.json"),
     );
@@ -1092,6 +1146,537 @@ fn workspace_escape_returns_to_launcher_when_launcher_is_available() -> Result<(
     assert!(!handle_shell_key(
         &mut shell,
         KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+    )?);
+    assert!(matches!(shell, AppShell::Launcher(_)));
+    Ok(())
+}
+
+#[test]
+fn help_overlay_closes_before_workspace_returns_to_launcher() -> Result<()> {
+    let workspace = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+            )),
+        }],
+        50,
+    )?;
+    let launcher = LauncherApp::new(
+        vec![crate::config::ConnectionConfig {
+            name: "pg".to_string(),
+            url: "postgresql://postgres@localhost/postgres".to_string(),
+            read_only: false,
+        }],
+        std::env::temp_dir().join("relora-help-before-launcher-return-test.json"),
+    );
+    let mut shell = AppShell::Workspace(WorkspaceShell::with_launcher(workspace, launcher).into());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::F(FKEY_HELP), KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("workspace should remain visible while help is open");
+    };
+    assert!(workspace.help_overlay_open());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("first escape should close help, not return to launcher");
+    };
+    assert!(!workspace.help_overlay_open());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )?);
+    assert!(matches!(shell, AppShell::Launcher(_)));
+    Ok(())
+}
+
+#[test]
+fn command_palette_can_open_sql_editor_before_returning_to_launcher() -> Result<()> {
+    let workspace = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+            )),
+        }],
+        50,
+    )?;
+    let launcher = LauncherApp::new(
+        vec![crate::config::ConnectionConfig {
+            name: "pg".to_string(),
+            url: "postgresql://postgres@localhost/postgres".to_string(),
+            read_only: false,
+        }],
+        std::env::temp_dir().join("relora-command-palette-shell-flow-test.json"),
+    );
+    let mut shell = AppShell::Workspace(WorkspaceShell::with_launcher(workspace, launcher).into());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("workspace should remain active while the command palette is open");
+    };
+    assert!(workspace.command_palette_open());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+    )?);
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+    )?);
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("executing a command should keep the workspace active");
+    };
+    assert!(!workspace.command_palette_open());
+    assert!(workspace.is_editor_open());
+    assert_eq!(workspace.active_right_tab(), RightPaneTab::Sql);
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("first escape should close the SQL editor");
+    };
+    assert!(!workspace.is_editor_open());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )?);
+    assert!(matches!(shell, AppShell::Launcher(_)));
+    Ok(())
+}
+
+#[test]
+fn sql_history_overlay_closes_before_editor_and_launcher_return() -> Result<()> {
+    let workspace = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(
+                MockDriver::new(
+                    vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                    vec![preview(&["id"], &[&["1"]])],
+                )
+                .with_executions(vec![query(&["id"], &[&["1"]])]),
+            ),
+        }],
+        50,
+    )?;
+    let launcher = LauncherApp::new(
+        vec![crate::config::ConnectionConfig {
+            name: "pg".to_string(),
+            url: "postgresql://postgres@localhost/postgres".to_string(),
+            read_only: false,
+        }],
+        std::env::temp_dir().join("relora-sql-history-shell-flow-test.json"),
+    );
+    let mut shell = AppShell::Workspace(WorkspaceShell::with_launcher(workspace, launcher).into());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char(KEY_BROWSER_OPEN_SQL), KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &mut shell else {
+        panic!("workspace should stay active after opening the SQL editor");
+    };
+    workspace.set_editor_sql("SELECT id FROM users;")?;
+    workspace.apply_action(WorkspaceAction::ExecuteEditor)?;
+    drain_until_result_visible(workspace)?;
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char(KEY_SQL_HISTORY), KeyModifiers::CONTROL),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("workspace should remain active while SQL history is open");
+    };
+    assert!(workspace.sql_history_open());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("first escape should close SQL history");
+    };
+    assert!(!workspace.sql_history_open());
+    assert!(workspace.is_editor_open());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("second escape should close the SQL editor");
+    };
+    assert!(!workspace.is_editor_open());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )?);
+    assert!(matches!(shell, AppShell::Launcher(_)));
+    Ok(())
+}
+
+#[test]
+fn launcher_attached_shell_supports_command_palette_sql_history_and_help_flow() -> Result<()> {
+    let workspace = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(
+                MockDriver::new(
+                    vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                    vec![preview(&["id"], &[&["1"]])],
+                )
+                .with_executions(vec![
+                    query(&["id"], &[&["1"]]),
+                    query(&["rerun"], &[&["history"]]),
+                ]),
+            ),
+        }],
+        50,
+    )?;
+    let launcher = LauncherApp::new(
+        vec![crate::config::ConnectionConfig {
+            name: "pg".to_string(),
+            url: "postgresql://postgres@localhost/postgres".to_string(),
+            read_only: false,
+        }],
+        std::env::temp_dir().join("relora-launcher-attached-first-run-shell-flow-test.json"),
+    );
+    let mut shell = AppShell::Workspace(WorkspaceShell::with_launcher(workspace, launcher).into());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char(KEY_COMMAND_PALETTE), KeyModifiers::CONTROL),
+    )?);
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+    )?);
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+    )?);
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &mut shell else {
+        panic!("command palette execution should keep the workspace active");
+    };
+    assert!(workspace.is_editor_open());
+    assert_eq!(workspace.active_right_tab(), RightPaneTab::Sql);
+
+    workspace.set_editor_sql("SELECT id FROM users;")?;
+    workspace.apply_action(WorkspaceAction::ExecuteEditor)?;
+    drain_until_result_visible(workspace)?;
+    assert_eq!(workspace.active_grid().columns, vec!["id"]);
+    assert_eq!(workspace.active_grid().rows[0][0], "1");
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char(KEY_SQL_HISTORY), KeyModifiers::CONTROL),
+    )?);
+    let AppShell::Workspace(workspace) = &mut shell else {
+        panic!("workspace should remain active while SQL history is open");
+    };
+    assert!(workspace.sql_history_open());
+    workspace.apply_action(WorkspaceAction::RunSqlHistorySelection)?;
+    drain_until_result_visible(workspace)?;
+    assert_eq!(workspace.active_grid().columns, vec!["rerun"]);
+    assert_eq!(workspace.active_grid().rows[0][0], "history");
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::F(FKEY_HELP), KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("workspace should remain active while help is open");
+    };
+    assert!(workspace.help_overlay_open());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("first escape should close help");
+    };
+    assert!(!workspace.help_overlay_open());
+    assert!(workspace.is_editor_open());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("second escape should close the SQL editor");
+    };
+    assert!(!workspace.is_editor_open());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )?);
+    assert!(matches!(shell, AppShell::Launcher(_)));
+    Ok(())
+}
+
+#[test]
+fn launcher_attached_shell_supports_data_filter_row_inspector_and_sql_rerun_flow() -> Result<()> {
+    let workspace = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(
+                MockDriver::new(
+                    vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                    vec![
+                        preview(
+                            &["id", "email", "status"],
+                            &[
+                                &["1", "alice@example.com", "active"],
+                                &["2", "bob@example.com", "pending"],
+                                &["3", "carol@example.com", "disabled"],
+                            ],
+                        ),
+                        preview(
+                            &["id", "email", "status"],
+                            &[&["2", "bob@example.com", "pending"]],
+                        ),
+                    ],
+                )
+                .with_executions(vec![
+                    query(&["status"], &[&["ok"]]),
+                    query(&["rerun"], &[&["history"]]),
+                ]),
+            ),
+        }],
+        50,
+    )?;
+    let launcher = LauncherApp::new(
+        vec![crate::config::ConnectionConfig {
+            name: "pg".to_string(),
+            url: "postgresql://postgres@localhost/postgres".to_string(),
+            read_only: false,
+        }],
+        std::env::temp_dir().join("relora-launcher-attached-filter-row-sql-flow-test.json"),
+    );
+    let mut shell = AppShell::Workspace(WorkspaceShell::with_launcher(workspace, launcher).into());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char(KEY_BROWSER_FILTER), KeyModifiers::NONE),
+    )?);
+    for ch in ['b', 'o', 'b'] {
+        assert!(!handle_shell_key(
+            &mut shell,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        )?);
+    }
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &mut shell else {
+        panic!("workspace should remain active while the filter loads");
+    };
+    drain_until(
+        workspace,
+        |workspace| {
+            workspace.active_data_filter() == Some("bob")
+                && workspace.active_preview().rows.len() == 1
+                && workspace.active_preview().rows[0][1] == "bob@example.com"
+        },
+        "the filtered data preview",
+    )?;
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+    )?);
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("workspace should remain active while the row inspector is open");
+    };
+    let inspector = workspace
+        .view()
+        .row_inspector
+        .expect("row inspector should open for the filtered row");
+    assert_eq!(inspector.values[1], "bob@example.com");
+    assert_eq!(inspector.values[2], "pending");
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("escape should close the row inspector before leaving the workspace");
+    };
+    assert!(!workspace.row_inspector_open());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char(KEY_BROWSER_OPEN_SQL), KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &mut shell else {
+        panic!("workspace should stay active after opening the SQL editor");
+    };
+    workspace.set_editor_sql("SELECT 'ok' AS status;")?;
+    workspace.apply_action(WorkspaceAction::ExecuteEditor)?;
+    drain_until_result_visible(workspace)?;
+    assert_eq!(workspace.active_grid().columns, vec!["status"]);
+    assert_eq!(workspace.active_grid().rows[0][0], "ok");
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char(KEY_SQL_HISTORY), KeyModifiers::CONTROL),
+    )?);
+    let AppShell::Workspace(workspace) = &mut shell else {
+        panic!("workspace should remain active while SQL history is open");
+    };
+    assert!(workspace.sql_history_open());
+    workspace.apply_action(WorkspaceAction::RunSqlHistorySelection)?;
+    drain_until_result_visible(workspace)?;
+    assert_eq!(workspace.active_grid().columns, vec!["rerun"]);
+    assert_eq!(workspace.active_grid().rows[0][0], "history");
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("first escape should close the SQL editor");
+    };
+    assert!(!workspace.is_editor_open());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )?);
+    assert!(matches!(shell, AppShell::Launcher(_)));
+    Ok(())
+}
+
+#[test]
+fn launcher_attached_shell_supports_staged_crud_commit_flow() -> Result<()> {
+    let workspace = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(
+                MockDriver::new(
+                    vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                    vec![preview(&["id", "email"], &[&["1", "alice@example.com"]])],
+                )
+                .with_executions(vec![query(&["updated"], &[&["1"]])]),
+            ),
+        }],
+        50,
+    )?;
+    let launcher = LauncherApp::new(
+        vec![crate::config::ConnectionConfig {
+            name: "pg".to_string(),
+            url: "postgresql://postgres@localhost/postgres".to_string(),
+            read_only: false,
+        }],
+        std::env::temp_dir().join("relora-launcher-attached-staged-crud-flow-test.json"),
+    );
+    let mut shell = AppShell::Workspace(WorkspaceShell::with_launcher(workspace, launcher).into());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+    )?);
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+    )?);
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Char(KEY_DATA_GRID_EDIT_CELL), KeyModifiers::NONE),
+    )?);
+
+    let AppShell::Workspace(workspace) = &mut shell else {
+        panic!("workspace should remain active while cell edit is open");
+    };
+    workspace.clear_cell_edit_input()?;
+    for ch in "new@example.com".chars() {
+        assert!(!handle_shell_key(
+            &mut shell,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        )?);
+    }
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )?);
+
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("workspace should remain active while staged SQL is previewed");
+    };
+    let staged = workspace
+        .view()
+        .staged_crud
+        .expect("staged CRUD preview should be visible");
+    assert!(staged.preview_sql.contains("ROLLBACK;"));
+    assert!(staged.commit_sql.contains("COMMIT;"));
+    assert!(
+        workspace
+            .editor_snapshot()
+            .expect("previewing staged CRUD should open the SQL editor")
+            .sql
+            .contains("\"email\" = 'new@example.com'")
+    );
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(
+            KeyCode::Char(KEY_EDITOR_COMMIT_STAGED),
+            KeyModifiers::CONTROL
+        ),
+    )?);
+    let AppShell::Workspace(workspace) = &mut shell else {
+        panic!("workspace should remain active while staged CRUD commits");
+    };
+    drain_until_result_visible(workspace)?;
+    assert_eq!(workspace.active_grid().columns, vec!["updated"]);
+    assert_eq!(workspace.active_grid().rows[0][0], "1");
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )?);
+    let AppShell::Workspace(workspace) = &shell else {
+        panic!("first escape should close the SQL editor");
+    };
+    assert!(!workspace.is_editor_open());
+
+    assert!(!handle_shell_key(
+        &mut shell,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
     )?);
     assert!(matches!(shell, AppShell::Launcher(_)));
     Ok(())
@@ -1169,6 +1754,7 @@ fn launcher_screen_renders_wordmark_logo_above_brand_copy() -> Result<()> {
         vec![crate::config::ConnectionConfig {
             name: "pg".to_string(),
             url: "postgresql://postgres:postgres@localhost/postgres".to_string(),
+            read_only: false,
         }],
         std::env::temp_dir().join("relora-launcher-logo-test.json"),
     );
@@ -1237,6 +1823,8 @@ fn launcher_connection_form_renders_structured_database_fields() -> Result<()> {
     launcher.apply_action(LauncherAction::OpenCreateConnectionForm)?;
     launcher.apply_action(LauncherAction::SwitchFormField)?;
     launcher.insert_form_char('m')?;
+    launcher.apply_action(LauncherAction::SwitchFormField)?;
+    launcher.insert_form_char('o')?;
     for _ in 0..4 {
         launcher.apply_action(LauncherAction::SwitchFormField)?;
     }
@@ -1252,6 +1840,7 @@ fn launcher_connection_form_renders_structured_database_fields() -> Result<()> {
         .form_snapshot()
         .expect("launcher form should be open");
     assert_eq!(form.field, LauncherFormField::Password);
+    assert!(form.read_only);
 
     let backend = TestBackend::new(100, 32);
     let mut terminal = Terminal::new(backend)?;
@@ -1269,6 +1858,7 @@ fn launcher_connection_form_renders_structured_database_fields() -> Result<()> {
         .join("\n");
 
     assert!(rendered.contains("Driver: MySQL/MariaDB"));
+    assert!(rendered.contains("Mode: Read-only"));
     assert!(rendered.contains("Host / SQLite path"));
     assert!(rendered.contains("User: alice"));
     assert!(rendered.contains("Password: ******"));
@@ -1325,6 +1915,30 @@ fn launcher_form_arrow_keys_move_up_and_cycle_driver() -> Result<()> {
         launcher.form_snapshot().expect("form should be open").field,
         LauncherFormField::Name
     );
+
+    handle_launcher_form_key(
+        &mut launcher,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::empty()),
+    )?;
+    handle_launcher_form_key(
+        &mut launcher,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::empty()),
+    )?;
+    assert_eq!(
+        launcher.form_snapshot().expect("form should be open").field,
+        LauncherFormField::Access
+    );
+
+    handle_launcher_form_key(
+        &mut launcher,
+        KeyEvent::new(KeyCode::Right, KeyModifiers::empty()),
+    )?;
+    assert!(
+        launcher
+            .form_snapshot()
+            .expect("form should be open")
+            .read_only
+    );
     Ok(())
 }
 
@@ -1376,6 +1990,7 @@ fn launcher_screen_is_centered_in_the_canvas() -> Result<()> {
         vec![crate::config::ConnectionConfig {
             name: "pg".to_string(),
             url: "postgresql://postgres:postgres@localhost/postgres".to_string(),
+            read_only: false,
         }],
         std::env::temp_dir().join("relora-launcher-center-test.json"),
     );

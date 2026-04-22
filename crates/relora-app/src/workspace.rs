@@ -6093,10 +6093,10 @@ fn sync_insert_row_form_field(field: &mut InsertRowFormFieldState) {
     if let Some(date) = parse_insert_row_form_date_value(field.kind, trimmed) {
         field.date_value = Some(date);
     }
-    if field.kind.supports_time_picker()
-        && let Some(time) = parse_insert_row_form_time_value(field.kind, trimmed)
-    {
-        field.time_value = Some(time);
+    if field.kind.supports_time_picker() {
+        if let Some(time) = parse_insert_row_form_time_value(field.kind, trimmed) {
+            field.time_value = Some(time);
+        }
     }
 }
 

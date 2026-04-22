@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Result, anyhow};
@@ -17,16 +17,18 @@ use crate::{
     completion::{CompletionItem, suggest_sql_completions},
     editor::SqlEditorBuffer,
     sql_tools::{
-        StagedCrudSql, copy_row_text, explain_sql, primary_key_names, staged_update_sql,
-        where_clause_for_row,
+        StagedCrudSql, copy_row_text, explain_sql, primary_key_names, staged_delete_sql,
+        staged_insert_sql, staged_update_sql, where_clause_for_row,
     },
     templates::{delete_template, insert_template, select_template, update_template},
     tree::{TreeEntry, TreeNodeKey, TreeRow},
     view::{
         CellEditView, CommandPaletteItemView, CommandPaletteView, DataFilterView,
-        DeleteConfirmationView, EditorCompletionView, EditorView, RightPaneTab, RightPaneTabView,
-        RowInspectorPane, RowInspectorView, SaveSqlDialogView, SavedSqlView, SqlHistoryView,
-        StagedCrudView, StructureView, WorkspaceView,
+        DeleteConfirmationView, EditorCompletionView, EditorView, InsertRowDatePickerSnapshot,
+        InsertRowDateTimeSegmentView, InsertRowFieldKindView, InsertRowFieldSnapshot,
+        InsertRowFormSnapshot, RightPaneTab, RightPaneTabView, RowInspectorPane, RowInspectorView,
+        SaveSqlDialogView, SavedSqlView, SqlHistoryView, StagedCrudView, StructureView,
+        WorkspaceView,
     },
 };
 
@@ -89,6 +91,11 @@ pub enum WorkspaceAction {
     OpenSaveSqlDialog,
     CloseSaveSqlDialog,
     ConfirmSaveSql,
+    OpenInsertRowForm,
+    CloseInsertRowForm,
+    NextInsertRowField,
+    PreviousInsertRowField,
+    PreviewInsertRowForm,
     DeleteSavedSqlFromEditor,
     OpenDataFilter,
     CloseDataFilter,
@@ -97,6 +104,7 @@ pub enum WorkspaceAction {
     CopyCurrentRow,
     CopyCurrentWhereClause,
     StartCellEdit,
+    PreviewDeleteCurrentRow,
     CloseCellEdit,
     PreviewStagedCrud,
     CommitStagedCrud,
@@ -335,6 +343,7 @@ pub struct WorkspaceApp {
     sql_history: SqlHistoryState,
     saved_sql: SavedSqlState,
     save_sql_dialog: Option<SaveSqlDialogState>,
+    insert_row_form: Option<InsertRowFormState>,
     data_filter: Option<DataFilterState>,
     active_data_filter: Option<String>,
     preview_page_offset: usize,
@@ -432,6 +441,116 @@ struct DataFilterState {
 
 struct SaveSqlDialogState {
     name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InsertRowFieldKind {
+    Text,
+    Number,
+    Boolean,
+    Date,
+    DateTime,
+    Json,
+}
+
+impl InsertRowFieldKind {
+    fn supports_date_picker(self) -> bool {
+        matches!(self, Self::Date | Self::DateTime)
+    }
+
+    fn supports_time_picker(self) -> bool {
+        matches!(self, Self::DateTime)
+    }
+
+    fn into_view(self) -> InsertRowFieldKindView {
+        match self {
+            Self::Text => InsertRowFieldKindView::Text,
+            Self::Number => InsertRowFieldKindView::Number,
+            Self::Boolean => InsertRowFieldKindView::Boolean,
+            Self::Date => InsertRowFieldKindView::Date,
+            Self::DateTime => InsertRowFieldKindView::DateTime,
+            Self::Json => InsertRowFieldKindView::Json,
+        }
+    }
+}
+
+impl InsertRowDateTimeSegment {
+    fn default_for_kind(kind: InsertRowFieldKind) -> Option<Self> {
+        kind.supports_time_picker().then_some(Self::Day)
+    }
+
+    fn cycle(self, delta: isize) -> Self {
+        const ORDER: [InsertRowDateTimeSegment; 4] = [
+            InsertRowDateTimeSegment::Day,
+            InsertRowDateTimeSegment::Hour,
+            InsertRowDateTimeSegment::Minute,
+            InsertRowDateTimeSegment::Second,
+        ];
+        let current_index = ORDER
+            .iter()
+            .position(|segment| *segment == self)
+            .unwrap_or(0);
+        let len = ORDER.len();
+        let offset = delta.unsigned_abs() % len;
+        let next_index = if delta.is_negative() {
+            (current_index + len - offset) % len
+        } else {
+            (current_index + offset) % len
+        };
+        ORDER[next_index]
+    }
+
+    fn into_view(self) -> InsertRowDateTimeSegmentView {
+        match self {
+            Self::Day => InsertRowDateTimeSegmentView::Day,
+            Self::Hour => InsertRowDateTimeSegmentView::Hour,
+            Self::Minute => InsertRowDateTimeSegmentView::Minute,
+            Self::Second => InsertRowDateTimeSegmentView::Second,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InsertRowDateValue {
+    year: i32,
+    month: u8,
+    day: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InsertRowTimeValue {
+    hour: u8,
+    minute: u8,
+    second: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InsertRowDateTimeSegment {
+    Day,
+    Hour,
+    Minute,
+    Second,
+}
+
+#[derive(Clone)]
+struct InsertRowFormFieldState {
+    name: String,
+    data_type: String,
+    nullable: bool,
+    has_default: bool,
+    is_primary_key: bool,
+    kind: InsertRowFieldKind,
+    value: String,
+    date_value: Option<InsertRowDateValue>,
+    time_value: Option<InsertRowTimeValue>,
+    time_segment: Option<InsertRowDateTimeSegment>,
+}
+
+struct InsertRowFormState {
+    connection_index: usize,
+    object: DbObjectRef,
+    selected_field: usize,
+    fields: Vec<InsertRowFormFieldState>,
 }
 
 struct CellEditState {
@@ -677,6 +796,7 @@ impl WorkspaceApp {
             sql_history: SqlHistoryState::default(),
             saved_sql: SavedSqlState::default(),
             save_sql_dialog: None,
+            insert_row_form: None,
             data_filter: None,
             active_data_filter: None,
             preview_page_offset: 0,
@@ -739,10 +859,16 @@ impl WorkspaceApp {
                 | WorkspaceAction::PreviousSavedSqlItem
                 | WorkspaceAction::OpenSaveSqlDialog
                 | WorkspaceAction::CloseSaveSqlDialog
+                | WorkspaceAction::OpenInsertRowForm
+                | WorkspaceAction::CloseInsertRowForm
+                | WorkspaceAction::NextInsertRowField
+                | WorkspaceAction::PreviousInsertRowField
+                | WorkspaceAction::PreviewInsertRowForm
                 | WorkspaceAction::DeleteSavedSqlFromEditor
                 | WorkspaceAction::OpenDataFilter
                 | WorkspaceAction::CloseDataFilter
                 | WorkspaceAction::StartCellEdit
+                | WorkspaceAction::PreviewDeleteCurrentRow
                 | WorkspaceAction::CloseCellEdit
                 | WorkspaceAction::ConfirmDeleteOperation
                 | WorkspaceAction::CancelDeleteOperation
@@ -851,6 +977,17 @@ impl WorkspaceApp {
                 let result = self.confirm_save_sql();
                 self.handle_error(result);
             }
+            WorkspaceAction::OpenInsertRowForm => {
+                let result = self.open_insert_row_form();
+                self.handle_error(result);
+            }
+            WorkspaceAction::CloseInsertRowForm => self.close_insert_row_form(),
+            WorkspaceAction::NextInsertRowField => self.move_insert_row_form_selection(1),
+            WorkspaceAction::PreviousInsertRowField => self.move_insert_row_form_selection(-1),
+            WorkspaceAction::PreviewInsertRowForm => {
+                let result = self.preview_insert_row_form();
+                self.handle_error(result);
+            }
             WorkspaceAction::DeleteSavedSqlFromEditor => {
                 let result = self.delete_saved_sql_from_editor();
                 self.handle_error(result);
@@ -885,6 +1022,10 @@ impl WorkspaceApp {
             WorkspaceAction::CloseEditorCompletion => self.close_editor_completion(),
             WorkspaceAction::StartCellEdit => {
                 let result = self.start_cell_edit();
+                self.handle_error(result);
+            }
+            WorkspaceAction::PreviewDeleteCurrentRow => {
+                let result = self.preview_delete_current_row();
                 self.handle_error(result);
             }
             WorkspaceAction::CloseCellEdit => self.close_cell_edit(),
@@ -1096,6 +1237,7 @@ impl WorkspaceApp {
             sql_history: self.sql_history.view(),
             saved_sql: self.saved_sql.view(),
             save_sql_dialog: self.save_sql_dialog_view(),
+            insert_row_form_open: self.insert_row_form_open(),
             data_filter: self.data_filter_view(),
             cell_edit: self.cell_edit_view(),
             row_inspector: self.row_inspector_view(),
@@ -1255,6 +1397,10 @@ impl WorkspaceApp {
         self.save_sql_dialog.is_some()
     }
 
+    pub fn insert_row_form_open(&self) -> bool {
+        self.insert_row_form.is_some()
+    }
+
     pub fn insert_sql_history_search_char(&mut self, ch: char) -> Result<()> {
         self.sql_history.insert_char(ch);
         Ok(())
@@ -1299,6 +1445,267 @@ impl WorkspaceApp {
             .as_mut()
             .ok_or_else(|| anyhow!("save SQL dialog is not open"))?;
         dialog.name.clear();
+        Ok(())
+    }
+
+    pub fn insert_insert_row_form_char(&mut self, ch: char) -> Result<()> {
+        let form = self
+            .insert_row_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("insert row form is not open"))?;
+        let field = form
+            .fields
+            .get_mut(form.selected_field)
+            .ok_or_else(|| anyhow!("selected insert row field is no longer available"))?;
+        field.value.push(ch);
+        sync_insert_row_form_field(field);
+        Ok(())
+    }
+
+    pub fn backspace_insert_row_form(&mut self) -> Result<()> {
+        let form = self
+            .insert_row_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("insert row form is not open"))?;
+        let field = form
+            .fields
+            .get_mut(form.selected_field)
+            .ok_or_else(|| anyhow!("selected insert row field is no longer available"))?;
+        field.value.pop();
+        sync_insert_row_form_field(field);
+        Ok(())
+    }
+
+    pub fn clear_insert_row_form_field(&mut self) -> Result<()> {
+        let form = self
+            .insert_row_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("insert row form is not open"))?;
+        let field = form
+            .fields
+            .get_mut(form.selected_field)
+            .ok_or_else(|| anyhow!("selected insert row field is no longer available"))?;
+        field.value.clear();
+        sync_insert_row_form_field(field);
+        Ok(())
+    }
+
+    pub fn insert_row_form_selected_field_supports_date_picker(&self) -> bool {
+        self.insert_row_form
+            .as_ref()
+            .and_then(|form| form.fields.get(form.selected_field))
+            .is_some_and(|field| field.kind.supports_date_picker())
+    }
+
+    pub fn insert_row_form_selected_field_supports_time_picker(&self) -> bool {
+        self.insert_row_form
+            .as_ref()
+            .and_then(|form| form.fields.get(form.selected_field))
+            .is_some_and(|field| field.kind.supports_time_picker())
+    }
+
+    pub fn adjust_insert_row_form_date_days(&mut self, delta: i32) -> Result<()> {
+        self.mutate_selected_insert_row_form_date(|date| date.add_days(delta))
+    }
+
+    pub fn adjust_insert_row_form_date_months(&mut self, delta: i32) -> Result<()> {
+        self.mutate_selected_insert_row_form_date(|date| date.add_months(delta))
+    }
+
+    pub fn adjust_insert_row_form_date_years(&mut self, delta: i32) -> Result<()> {
+        self.mutate_selected_insert_row_form_date(|date| date.add_years(delta))
+    }
+
+    pub fn set_insert_row_form_date_today(&mut self) -> Result<()> {
+        self.mutate_selected_insert_row_form_date(|_| InsertRowDateValue::today())
+    }
+
+    pub fn adjust_insert_row_form_time_hours(&mut self, delta: i32) -> Result<()> {
+        self.mutate_selected_insert_row_form_time(|time| time.add_hours(delta))
+    }
+
+    pub fn adjust_insert_row_form_time_minutes(&mut self, delta: i32) -> Result<()> {
+        self.mutate_selected_insert_row_form_time(|time| time.add_minutes(delta))
+    }
+
+    pub fn adjust_insert_row_form_time_seconds(&mut self, delta: i32) -> Result<()> {
+        self.mutate_selected_insert_row_form_time(|time| time.add_seconds(delta))
+    }
+
+    pub fn move_insert_row_form_time_segment(&mut self, delta: isize) -> Result<()> {
+        let form = self
+            .insert_row_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("insert row form is not open"))?;
+        let field = form
+            .fields
+            .get_mut(form.selected_field)
+            .ok_or_else(|| anyhow!("selected insert row field is no longer available"))?;
+        let segment = field
+            .time_segment
+            .ok_or_else(|| anyhow!("selected field does not support segmented datetime focus"))?;
+        field.time_segment = Some(segment.cycle(delta));
+        Ok(())
+    }
+
+    pub fn adjust_insert_row_form_active_time_segment(&mut self, delta: i32) -> Result<()> {
+        let form = self
+            .insert_row_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("insert row form is not open"))?;
+        let field = form
+            .fields
+            .get_mut(form.selected_field)
+            .ok_or_else(|| anyhow!("selected insert row field is no longer available"))?;
+        let segment = field
+            .time_segment
+            .ok_or_else(|| anyhow!("selected field does not support segmented datetime focus"))?;
+
+        match segment {
+            InsertRowDateTimeSegment::Day => {
+                let base = field.date_value.unwrap_or_else(InsertRowDateValue::today);
+                let updated = base.add_days(delta);
+                field.date_value = Some(updated);
+                field.value = render_insert_row_form_field_temporal_value(
+                    field.kind,
+                    field.value.trim(),
+                    updated,
+                    field.time_value,
+                );
+            }
+            InsertRowDateTimeSegment::Hour => {
+                let base = field
+                    .time_value
+                    .unwrap_or_else(InsertRowTimeValue::midnight);
+                let updated = base.add_hours(delta);
+                field.time_value = Some(updated);
+                let date = field.date_value.unwrap_or_else(InsertRowDateValue::today);
+                field.value = render_insert_row_form_field_temporal_value(
+                    field.kind,
+                    field.value.trim(),
+                    date,
+                    Some(updated),
+                );
+            }
+            InsertRowDateTimeSegment::Minute => {
+                let base = field
+                    .time_value
+                    .unwrap_or_else(InsertRowTimeValue::midnight);
+                let updated = base.add_minutes(delta);
+                field.time_value = Some(updated);
+                let date = field.date_value.unwrap_or_else(InsertRowDateValue::today);
+                field.value = render_insert_row_form_field_temporal_value(
+                    field.kind,
+                    field.value.trim(),
+                    date,
+                    Some(updated),
+                );
+            }
+            InsertRowDateTimeSegment::Second => {
+                let base = field
+                    .time_value
+                    .unwrap_or_else(InsertRowTimeValue::midnight);
+                let updated = base.add_seconds(delta);
+                field.time_value = Some(updated);
+                let date = field.date_value.unwrap_or_else(InsertRowDateValue::today);
+                field.value = render_insert_row_form_field_temporal_value(
+                    field.kind,
+                    field.value.trim(),
+                    date,
+                    Some(updated),
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn set_insert_row_form_datetime_now(&mut self) -> Result<()> {
+        let form = self
+            .insert_row_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("insert row form is not open"))?;
+        let field = form
+            .fields
+            .get_mut(form.selected_field)
+            .ok_or_else(|| anyhow!("selected insert row field is no longer available"))?;
+        if !field.kind.supports_time_picker() {
+            return Err(anyhow!(
+                "selected field does not support the datetime picker"
+            ));
+        }
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let date = InsertRowDateValue::from_unix_days((now / 86_400) as i64);
+        let time = InsertRowTimeValue::from_seconds_of_day((now % 86_400) as u32);
+        field.date_value = Some(date);
+        field.time_value = Some(time);
+        field.value = render_insert_row_form_field_temporal_value(
+            field.kind,
+            field.value.trim(),
+            date,
+            Some(time),
+        );
+        Ok(())
+    }
+
+    fn mutate_selected_insert_row_form_date<F>(&mut self, mutator: F) -> Result<()>
+    where
+        F: FnOnce(InsertRowDateValue) -> InsertRowDateValue,
+    {
+        let form = self
+            .insert_row_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("insert row form is not open"))?;
+        let field = form
+            .fields
+            .get_mut(form.selected_field)
+            .ok_or_else(|| anyhow!("selected insert row field is no longer available"))?;
+        if !field.kind.supports_date_picker() {
+            return Err(anyhow!("selected field does not support the date picker"));
+        }
+        let base = field.date_value.unwrap_or_else(InsertRowDateValue::today);
+        let updated = mutator(base);
+        field.date_value = Some(updated);
+        field.value = render_insert_row_form_field_temporal_value(
+            field.kind,
+            field.value.trim(),
+            updated,
+            field.time_value,
+        );
+        Ok(())
+    }
+
+    fn mutate_selected_insert_row_form_time<F>(&mut self, mutator: F) -> Result<()>
+    where
+        F: FnOnce(InsertRowTimeValue) -> InsertRowTimeValue,
+    {
+        let form = self
+            .insert_row_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("insert row form is not open"))?;
+        let field = form
+            .fields
+            .get_mut(form.selected_field)
+            .ok_or_else(|| anyhow!("selected insert row field is no longer available"))?;
+        if !field.kind.supports_time_picker() {
+            return Err(anyhow!("selected field does not support the time picker"));
+        }
+        let base = field
+            .time_value
+            .unwrap_or_else(InsertRowTimeValue::midnight);
+        let updated = mutator(base);
+        field.time_value = Some(updated);
+        let date = field.date_value.unwrap_or_else(InsertRowDateValue::today);
+        field.value = render_insert_row_form_field_temporal_value(
+            field.kind,
+            field.value.trim(),
+            date,
+            Some(updated),
+        );
         Ok(())
     }
 
@@ -1461,6 +1868,7 @@ impl WorkspaceApp {
             self.reset_grid_scroll();
             self.active_data_filter = None;
             self.reset_preview_pagination();
+            self.insert_row_form = None;
             self.staged_crud = None;
         }
         self.ensure_selected_object_preview()
@@ -2423,6 +2831,119 @@ impl WorkspaceApp {
         self.save_sql_dialog = None;
     }
 
+    fn open_insert_row_form(&mut self) -> Result<()> {
+        let (connection_index, object) = self.selected_table_target()?;
+        let using_loaded_structure = self
+            .structure
+            .object
+            .as_ref()
+            .is_some_and(|current| current == &object)
+            && !self.structure.columns.is_empty();
+        let fields = self.insert_row_form_fields_for_object(&object)?;
+        if fields.is_empty() {
+            return Err(anyhow!("no columns are available for insert"));
+        }
+        let selected_field = fields
+            .iter()
+            .position(|field| {
+                !field.is_primary_key
+                    && !field.has_default
+                    && !field.name.eq_ignore_ascii_case("id")
+            })
+            .or_else(|| {
+                fields
+                    .iter()
+                    .position(|field| !field.is_primary_key && !field.has_default)
+            })
+            .unwrap_or(0);
+        self.insert_row_form = Some(InsertRowFormState {
+            connection_index,
+            object,
+            selected_field,
+            fields,
+        });
+        if !using_loaded_structure {
+            let object = self
+                .insert_row_form
+                .as_ref()
+                .map(|form| form.object.clone())
+                .ok_or_else(|| anyhow!("insert row form is no longer available"))?;
+            self.schedule_structure_for_connection_object(connection_index, object.clone())?;
+            self.workspace_status = Some(format!(
+                "Loading column types for {}...",
+                object.database_qualified_name()
+            ));
+        }
+        Ok(())
+    }
+
+    fn close_insert_row_form(&mut self) {
+        self.insert_row_form = None;
+    }
+
+    fn move_insert_row_form_selection(&mut self, delta: isize) {
+        let Some(form) = self.insert_row_form.as_mut() else {
+            return;
+        };
+        if form.fields.is_empty() {
+            form.selected_field = 0;
+            return;
+        }
+        let field_count = form.fields.len();
+        let offset = delta.unsigned_abs() % field_count;
+        form.selected_field = if delta.is_negative() {
+            (form.selected_field + field_count - offset) % field_count
+        } else {
+            (form.selected_field + offset) % field_count
+        };
+    }
+
+    fn preview_insert_row_form(&mut self) -> Result<()> {
+        let form = self
+            .insert_row_form
+            .as_ref()
+            .ok_or_else(|| anyhow!("insert row form is not open"))?;
+        let capabilities = self.connection_capabilities(form.connection_index)?;
+        if !capabilities.supports_staged_crud {
+            return Err(anyhow!(
+                "the current connection does not support staged CRUD"
+            ));
+        }
+
+        let values = form
+            .fields
+            .iter()
+            .filter_map(|field| {
+                let value = field.value.trim();
+                (!value.is_empty()).then_some((field.name.clone(), value.to_string()))
+            })
+            .collect::<Vec<_>>();
+        if values.is_empty() {
+            return Err(anyhow!(
+                "enter at least one value before previewing the INSERT"
+            ));
+        }
+
+        let object = form.object.clone();
+        let connection_index = form.connection_index;
+        let sql = staged_insert_sql(capabilities, &object, &values)
+            .ok_or_else(|| anyhow!("could not build staged INSERT SQL"))?;
+        self.insert_row_form = None;
+        self.open_editor_tab(
+            connection_index,
+            Some(object.database.clone()),
+            format!("Stage INSERT {}", object.database_qualified_name()),
+            sql.preview_sql.clone(),
+        );
+        self.staged_crud = Some(StagedCrudState {
+            connection_index,
+            sql,
+        });
+        self.workspace_status =
+            Some("Preview staged INSERT; commit with Ctrl-G or command palette.".to_string());
+        Ok(())
+    }
+
     fn confirm_save_sql(&mut self) -> Result<()> {
         let dialog = self
             .save_sql_dialog
@@ -2671,6 +3192,41 @@ impl WorkspaceApp {
         Ok(())
     }
 
+    fn preview_delete_current_row(&mut self) -> Result<()> {
+        let (connection_index, object) = self.selected_table_target()?;
+        let capabilities = self.connection_capabilities(connection_index)?;
+        if !capabilities.supports_staged_crud {
+            return Err(anyhow!(
+                "the current connection does not support staged CRUD"
+            ));
+        }
+
+        let row_index = self.grid_selected_row_index();
+        let key_columns = self.selected_key_columns();
+        let sql = staged_delete_sql(
+            capabilities,
+            &object,
+            self.active_grid(),
+            row_index,
+            &key_columns,
+        )
+        .ok_or_else(|| anyhow!("could not build staged DELETE SQL"))?;
+
+        self.open_editor_tab(
+            connection_index,
+            Some(object.database.clone()),
+            format!("Stage DELETE {}", object.database_qualified_name()),
+            sql.preview_sql.clone(),
+        );
+        self.staged_crud = Some(StagedCrudState {
+            connection_index,
+            sql,
+        });
+        self.workspace_status =
+            Some("Preview staged DELETE; commit with Ctrl-G or command palette.".to_string());
+        Ok(())
+    }
+
     fn commit_staged_crud(&mut self) -> Result<()> {
         let (connection_index, sql) = self
             .staged_crud
@@ -2788,6 +3344,51 @@ impl WorkspaceApp {
         Some(SaveSqlDialogView { name: &dialog.name })
     }
 
+    pub fn insert_row_form_snapshot(&self) -> Option<InsertRowFormSnapshot> {
+        let form = self.insert_row_form.as_ref()?;
+        let date_picker = form.fields.get(form.selected_field).and_then(|field| {
+            field.kind.supports_date_picker().then(|| {
+                let date = field.date_value.unwrap_or_else(InsertRowDateValue::today);
+                let time_value = field.kind.supports_time_picker().then(|| {
+                    field
+                        .time_value
+                        .unwrap_or_else(InsertRowTimeValue::midnight)
+                });
+                let active_segment = field.time_segment.map(InsertRowDateTimeSegment::into_view);
+                field
+                    .date_value
+                    .unwrap_or_else(InsertRowDateValue::today)
+                    .snapshot(
+                        if field.value.trim().is_empty() {
+                            render_insert_row_form_field_temporal_value(
+                                field.kind, "", date, time_value,
+                            )
+                        } else {
+                            field.value.trim().to_string()
+                        },
+                        time_value.map(InsertRowTimeValue::to_hms_string),
+                        active_segment,
+                    )
+            })
+        });
+        Some(InsertRowFormSnapshot {
+            object_label: form.object.database_qualified_name(),
+            selected_index: form.selected_field,
+            fields: form
+                .fields
+                .iter()
+                .map(|field| InsertRowFieldSnapshot {
+                    name: field.name.clone(),
+                    data_type: field.data_type.clone(),
+                    value: field.value.clone(),
+                    required: !field.nullable && !field.has_default && !field.is_primary_key,
+                    kind: field.kind.into_view(),
+                })
+                .collect(),
+            date_picker,
+        })
+    }
+
     fn cell_edit_view(&self) -> Option<CellEditView<'_>> {
         let edit = self.cell_edit.as_ref()?;
         Some(CellEditView {
@@ -2850,6 +3451,7 @@ impl WorkspaceApp {
             self.reset_grid_scroll();
             self.active_data_filter = None;
             self.reset_preview_pagination();
+            self.insert_row_form = None;
             self.staged_crud = None;
         }
         self.ensure_selected_object_preview()
@@ -3575,6 +4177,131 @@ impl WorkspaceApp {
         Ok((connection_index, object))
     }
 
+    fn insert_row_form_fields_for_object(
+        &self,
+        object: &DbObjectRef,
+    ) -> Result<Vec<InsertRowFormFieldState>> {
+        let columns = if self.structure.object.as_ref() == Some(object)
+            && !self.structure.columns.is_empty()
+        {
+            self.structure.columns.clone()
+        } else if !self.active_grid().columns.is_empty() {
+            self.active_grid()
+                .columns
+                .iter()
+                .map(|name| DbColumn {
+                    name: name.clone(),
+                    data_type: String::new(),
+                    nullable: true,
+                    has_default: false,
+                    is_primary_key: false,
+                })
+                .collect()
+        } else {
+            return Err(anyhow!(
+                "load a preview or structure first so Relora knows which columns to insert"
+            ));
+        };
+
+        Ok(columns
+            .into_iter()
+            .map(|column| {
+                let kind = classify_insert_row_field_kind(&column.data_type);
+                let date_value = kind.supports_date_picker().then(InsertRowDateValue::today);
+                let time_value = kind
+                    .supports_time_picker()
+                    .then(InsertRowTimeValue::midnight);
+                InsertRowFormFieldState {
+                    name: column.name,
+                    data_type: column.data_type,
+                    nullable: column.nullable,
+                    has_default: column.has_default,
+                    is_primary_key: column.is_primary_key,
+                    kind,
+                    value: String::new(),
+                    date_value,
+                    time_value,
+                    time_segment: InsertRowDateTimeSegment::default_for_kind(kind),
+                }
+            })
+            .collect())
+    }
+
+    fn refresh_insert_row_form_field_types(&mut self, object: &DbObjectRef, columns: &[DbColumn]) {
+        let Some(form) = self.insert_row_form.as_mut() else {
+            return;
+        };
+        if &form.object != object {
+            return;
+        }
+
+        let selected_name = form
+            .fields
+            .get(form.selected_field)
+            .map(|field| field.name.clone());
+        let existing_fields = form
+            .fields
+            .iter()
+            .cloned()
+            .map(|field| (field.name.clone(), field))
+            .collect::<BTreeMap<_, _>>();
+
+        let mut fields = Vec::with_capacity(columns.len());
+        let mut existing_fields = existing_fields;
+        for column in columns {
+            let kind = classify_insert_row_field_kind(&column.data_type);
+            let mut field =
+                existing_fields
+                    .remove(&column.name)
+                    .unwrap_or(InsertRowFormFieldState {
+                        name: column.name.clone(),
+                        data_type: column.data_type.clone(),
+                        nullable: column.nullable,
+                        has_default: column.has_default,
+                        is_primary_key: column.is_primary_key,
+                        kind,
+                        value: String::new(),
+                        date_value: kind.supports_date_picker().then(InsertRowDateValue::today),
+                        time_value: kind
+                            .supports_time_picker()
+                            .then(InsertRowTimeValue::midnight),
+                        time_segment: InsertRowDateTimeSegment::default_for_kind(kind),
+                    });
+            field.data_type = column.data_type.clone();
+            field.nullable = column.nullable;
+            field.has_default = column.has_default;
+            field.is_primary_key = column.is_primary_key;
+            field.kind = kind;
+            if !field.kind.supports_date_picker() {
+                field.date_value = None;
+            } else if field.date_value.is_none() {
+                field.date_value = Some(InsertRowDateValue::today());
+            }
+            if !field.kind.supports_time_picker() {
+                field.time_value = None;
+                field.time_segment = None;
+            } else if field.time_value.is_none() {
+                field.time_value = Some(InsertRowTimeValue::midnight());
+                if field.time_segment.is_none() {
+                    field.time_segment = InsertRowDateTimeSegment::default_for_kind(field.kind);
+                }
+            } else if field.time_segment.is_none() {
+                field.time_segment = InsertRowDateTimeSegment::default_for_kind(field.kind);
+            }
+            sync_insert_row_form_field(&mut field);
+            fields.push(field);
+        }
+
+        if fields.is_empty() {
+            return;
+        }
+        form.selected_field = selected_name
+            .as_deref()
+            .and_then(|name| fields.iter().position(|field| field.name == name))
+            .unwrap_or_else(|| form.selected_field.min(fields.len().saturating_sub(1)));
+        form.fields = fields;
+    }
+
     fn current_grid_row_and_column(&self) -> Result<(&Vec<String>, usize)> {
         let grid = self.active_grid();
         let row_index = self.grid_selected_row_index();
@@ -4162,7 +4889,10 @@ impl WorkspaceApp {
                 }
 
                 match result {
-                    Ok(columns) => self.structure.finish_loaded(object, columns),
+                    Ok(columns) => {
+                        self.refresh_insert_row_form_field_types(&object, &columns);
+                        self.structure.finish_loaded(object, columns);
+                    }
                     Err(error) => self.structure.finish_error(object, error),
                 }
             }
@@ -5309,6 +6039,372 @@ fn sql_preview(sql: &str) -> String {
         preview.push('…');
     }
     preview
+}
+
+fn classify_insert_row_field_kind(data_type: &str) -> InsertRowFieldKind {
+    let normalized = data_type.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return InsertRowFieldKind::Text;
+    }
+    if normalized.contains("bool") || normalized == "tinyint(1)" {
+        return InsertRowFieldKind::Boolean;
+    }
+    if normalized.contains("date") && !normalized.contains("time") {
+        return InsertRowFieldKind::Date;
+    }
+    if normalized.contains("timestamp")
+        || normalized.contains("datetime")
+        || normalized.contains("timestamptz")
+    {
+        return InsertRowFieldKind::DateTime;
+    }
+    if normalized.contains("json") {
+        return InsertRowFieldKind::Json;
+    }
+    if [
+        "int", "serial", "numeric", "decimal", "real", "double", "float",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+    {
+        return InsertRowFieldKind::Number;
+    }
+    InsertRowFieldKind::Text
+}
+
+fn sync_insert_row_form_field(field: &mut InsertRowFormFieldState) {
+    if !field.kind.supports_date_picker() {
+        return;
+    }
+
+    let trimmed = field.value.trim();
+    if trimmed.is_empty() {
+        field
+            .date_value
+            .get_or_insert_with(InsertRowDateValue::today);
+        if field.kind.supports_time_picker() {
+            field
+                .time_value
+                .get_or_insert_with(InsertRowTimeValue::midnight);
+        }
+        return;
+    }
+
+    if let Some(date) = parse_insert_row_form_date_value(field.kind, trimmed) {
+        field.date_value = Some(date);
+    }
+    if field.kind.supports_time_picker()
+        && let Some(time) = parse_insert_row_form_time_value(field.kind, trimmed)
+    {
+        field.time_value = Some(time);
+    }
+}
+
+fn parse_insert_row_form_date_value(
+    kind: InsertRowFieldKind,
+    value: &str,
+) -> Option<InsertRowDateValue> {
+    match kind {
+        InsertRowFieldKind::Date => InsertRowDateValue::parse(value),
+        InsertRowFieldKind::DateTime => value.get(..10).and_then(InsertRowDateValue::parse),
+        _ => None,
+    }
+}
+
+fn parse_insert_row_form_time_value(
+    kind: InsertRowFieldKind,
+    value: &str,
+) -> Option<InsertRowTimeValue> {
+    match kind {
+        InsertRowFieldKind::DateTime => split_insert_row_form_datetime_time(value)
+            .and_then(|(_, rest)| parse_insert_row_form_time_prefix(rest).map(|(time, _)| time)),
+        _ => None,
+    }
+}
+
+fn render_insert_row_form_field_temporal_value(
+    kind: InsertRowFieldKind,
+    current_value: &str,
+    date: InsertRowDateValue,
+    time: Option<InsertRowTimeValue>,
+) -> String {
+    match kind {
+        InsertRowFieldKind::Date => date.to_iso_string(),
+        InsertRowFieldKind::DateTime => {
+            let (separator, trailing) = insert_row_form_datetime_layout(current_value);
+            let time = time
+                .or_else(|| parse_insert_row_form_time_value(kind, current_value))
+                .unwrap_or_else(InsertRowTimeValue::midnight);
+            format!(
+                "{}{}{}{}",
+                date.to_iso_string(),
+                separator,
+                time.to_hms_string(),
+                trailing
+            )
+        }
+        _ => current_value.to_string(),
+    }
+}
+
+fn split_insert_row_form_datetime_time(value: &str) -> Option<(char, &str)> {
+    let rest = value.get(10..)?;
+    if let Some(rest) = rest.strip_prefix('T') {
+        Some(('T', rest))
+    } else if let Some(rest) = rest.strip_prefix(' ') {
+        Some((' ', rest))
+    } else {
+        Some((' ', rest))
+    }
+}
+
+fn insert_row_form_datetime_layout(current_value: &str) -> (char, String) {
+    let Some((separator, rest)) = split_insert_row_form_datetime_time(current_value) else {
+        return (' ', String::new());
+    };
+    let trailing = parse_insert_row_form_time_prefix(rest)
+        .map(|(_, consumed)| rest[consumed..].to_string())
+        .unwrap_or_default();
+    (separator, trailing)
+}
+
+fn parse_insert_row_form_time_prefix(value: &str) -> Option<(InsertRowTimeValue, usize)> {
+    let bytes = value.as_bytes();
+    if bytes.len() < 5 {
+        return None;
+    }
+    if !bytes[0].is_ascii_digit()
+        || !bytes[1].is_ascii_digit()
+        || bytes[2] != b':'
+        || !bytes[3].is_ascii_digit()
+        || !bytes[4].is_ascii_digit()
+    {
+        return None;
+    }
+
+    let hour = value.get(0..2)?.parse::<u8>().ok()?;
+    let minute = value.get(3..5)?.parse::<u8>().ok()?;
+    let mut second = 0;
+    let mut consumed = 5;
+    if bytes.get(5) == Some(&b':') {
+        if bytes.len() < 8 || !bytes[6].is_ascii_digit() || !bytes[7].is_ascii_digit() {
+            return None;
+        }
+        second = value.get(6..8)?.parse::<u8>().ok()?;
+        consumed = 8;
+    }
+
+    InsertRowTimeValue::new(hour, minute, second).map(|time| (time, consumed))
+}
+
+impl InsertRowDateValue {
+    fn today() -> Self {
+        let unix_days = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs() / 86_400)
+            .unwrap_or_default();
+        Self::from_unix_days(unix_days as i64)
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        let mut parts = value.split('-');
+        let year = parts.next()?.parse::<i32>().ok()?;
+        let month = parts.next()?.parse::<u8>().ok()?;
+        let day = parts.next()?.parse::<u8>().ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Self::new(year, month, day)
+    }
+
+    fn new(year: i32, month: u8, day: u8) -> Option<Self> {
+        if !(1..=12).contains(&month) {
+            return None;
+        }
+        let max_day = days_in_month(year, month);
+        if !(1..=max_day).contains(&day) {
+            return None;
+        }
+        Some(Self { year, month, day })
+    }
+
+    fn to_iso_string(self) -> String {
+        format!("{:04}-{:02}-{:02}", self.year, self.month, self.day)
+    }
+
+    fn month_label(self) -> String {
+        const MONTHS: [&str; 12] = [
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ];
+        let month_name = MONTHS[usize::from(self.month.saturating_sub(1))];
+        format!("{month_name} {}", self.year)
+    }
+
+    fn first_weekday(self) -> usize {
+        let first = Self {
+            year: self.year,
+            month: self.month,
+            day: 1,
+        };
+        let unix_days = first.to_unix_days();
+        ((unix_days + 3).rem_euclid(7)) as usize
+    }
+
+    fn add_days(self, delta: i32) -> Self {
+        Self::from_unix_days(self.to_unix_days() + i64::from(delta))
+    }
+
+    fn add_months(self, delta: i32) -> Self {
+        let month_index = self.year * 12 + i32::from(self.month) - 1 + delta;
+        let year = month_index.div_euclid(12);
+        let month = (month_index.rem_euclid(12) + 1) as u8;
+        let day = self.day.min(days_in_month(year, month));
+        Self { year, month, day }
+    }
+
+    fn add_years(self, delta: i32) -> Self {
+        let year = self.year + delta;
+        let day = self.day.min(days_in_month(year, self.month));
+        Self {
+            year,
+            month: self.month,
+            day,
+        }
+    }
+
+    fn to_unix_days(self) -> i64 {
+        days_from_civil(self.year, self.month, self.day)
+    }
+
+    fn from_unix_days(days: i64) -> Self {
+        let (year, month, day) = civil_from_days(days);
+        Self { year, month, day }
+    }
+
+    fn snapshot(
+        self,
+        selected_value: String,
+        time_value: Option<String>,
+        active_segment: Option<InsertRowDateTimeSegmentView>,
+    ) -> InsertRowDatePickerSnapshot {
+        InsertRowDatePickerSnapshot {
+            month_label: self.month_label(),
+            selected_value,
+            time_value,
+            active_segment,
+            first_weekday: self.first_weekday(),
+            day_count: days_in_month(self.year, self.month),
+            selected_day: self.day,
+        }
+    }
+}
+
+impl InsertRowTimeValue {
+    fn midnight() -> Self {
+        Self {
+            hour: 0,
+            minute: 0,
+            second: 0,
+        }
+    }
+
+    fn new(hour: u8, minute: u8, second: u8) -> Option<Self> {
+        if hour > 23 || minute > 59 || second > 59 {
+            return None;
+        }
+        Some(Self {
+            hour,
+            minute,
+            second,
+        })
+    }
+
+    fn to_hms_string(self) -> String {
+        format!("{:02}:{:02}:{:02}", self.hour, self.minute, self.second)
+    }
+
+    fn from_seconds_of_day(seconds: u32) -> Self {
+        let hour = (seconds / 3_600) as u8;
+        let minute = ((seconds % 3_600) / 60) as u8;
+        let second = (seconds % 60) as u8;
+        Self {
+            hour,
+            minute,
+            second,
+        }
+    }
+
+    fn add_hours(self, delta: i32) -> Self {
+        self.add_seconds(delta.saturating_mul(3_600))
+    }
+
+    fn add_minutes(self, delta: i32) -> Self {
+        self.add_seconds(delta.saturating_mul(60))
+    }
+
+    fn add_seconds(self, delta: i32) -> Self {
+        let total_seconds =
+            i32::from(self.hour) * 3_600 + i32::from(self.minute) * 60 + i32::from(self.second);
+        let updated = (total_seconds + delta).rem_euclid(86_400);
+        let hour = (updated / 3_600) as u8;
+        let minute = ((updated % 3_600) / 60) as u8;
+        let second = (updated % 60) as u8;
+        Self {
+            hour,
+            minute,
+            second,
+        }
+    }
+}
+
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+fn days_in_month(year: i32, month: u8) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 30,
+    }
+}
+
+fn days_from_civil(year: i32, month: u8, day: u8) -> i64 {
+    let year = i64::from(year) - if month <= 2 { 1 } else { 0 };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let yoe = year - era * 400;
+    let month = i64::from(month);
+    let day = i64::from(day);
+    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+fn civil_from_days(days: i64) -> (i32, u8, u8) {
+    let days = days + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let doe = days - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = year + if month <= 2 { 1 } else { 0 };
+    (year as i32, month as u8, day as u8)
 }
 
 fn build_template_sql(

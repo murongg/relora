@@ -1,5 +1,8 @@
 use super::*;
-use relora_app::view::{SaveSqlDialogView, SavedSqlView};
+use relora_app::view::{
+    InsertRowDatePickerSnapshot, InsertRowDateTimeSegmentView, InsertRowFieldKindView,
+    InsertRowFormSnapshot, SaveSqlDialogView, SavedSqlView,
+};
 use relora_core::db::{
     DatabaseKind, DbObjectRef, DriverCapabilities, ExplainFlavor, IdentifierQuoteStyle,
 };
@@ -44,6 +47,10 @@ pub(super) fn draw_workspace(frame: &mut Frame<'_>, app: &WorkspaceApp) {
 
     if let Some(save_sql_dialog) = view.save_sql_dialog {
         draw_save_sql_dialog(frame, frame.area(), save_sql_dialog);
+    }
+
+    if let Some(insert_row_form) = app.insert_row_form_snapshot() {
+        draw_insert_row_form(frame, frame.area(), &insert_row_form);
     }
 
     if let Some(sql_history) = view.sql_history {
@@ -1816,6 +1823,233 @@ pub(super) fn draw_save_sql_dialog(
     frame.render_widget(paragraph, popup);
 }
 
+pub(super) fn draw_insert_row_form(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    form: &InsertRowFormSnapshot,
+) {
+    let popup = centered_rect(
+        INSERT_ROW_FORM_WIDTH_PERCENT,
+        INSERT_ROW_FORM_HEIGHT_PERCENT,
+        area,
+    );
+    frame.render_widget(Clear, popup);
+    let block = focusable_block(
+        format!(
+            "New Row {} | Tab next | Enter preview | Esc close",
+            form.object_label
+        ),
+        true,
+    );
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let sections = if let Some(date_picker) = &form.date_picker {
+        let picker_height = if date_picker.time_value.is_some() {
+            14
+        } else {
+            9
+        };
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(6), Constraint::Length(picker_height)])
+            .split(inner)
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(6)])
+            .split(inner)
+    };
+
+    let items = form
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let marker = if index == form.selected_index {
+                "› "
+            } else {
+                "  "
+            };
+            let meta = if field.data_type.is_empty() {
+                String::new()
+            } else if field.required {
+                format!(" [{} | required]", field.data_type)
+            } else {
+                format!(" [{}]", field.data_type)
+            };
+            let helper = match field.kind {
+                InsertRowFieldKindView::Date => " <date>",
+                InsertRowFieldKindView::Boolean => " <bool>",
+                InsertRowFieldKindView::Number => " <number>",
+                InsertRowFieldKindView::DateTime => " <datetime>",
+                InsertRowFieldKindView::Json => " <json>",
+                InsertRowFieldKindView::Text => "",
+            };
+            let value = if field.value.is_empty() {
+                Span::styled("<empty>", Style::default().fg(TEXT_MUTED))
+            } else {
+                Span::styled(field.value.as_str(), Style::default().fg(TEXT_STRONG))
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(marker, Style::default().fg(theme_accent_color())),
+                Span::styled(
+                    format!("{}{}{}", field.name, meta, helper),
+                    if index == form.selected_index {
+                        Style::default()
+                            .fg(theme_accent_color())
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(TEXT_SECONDARY)
+                    },
+                ),
+                Span::raw(" = "),
+                value,
+            ]))
+        })
+        .collect::<Vec<_>>();
+
+    let list = List::new(items).highlight_style(highlight_style());
+    let mut state = ListState::default();
+    if !form.fields.is_empty() {
+        state.select(Some(
+            form.selected_index.min(form.fields.len().saturating_sub(1)),
+        ));
+    }
+    frame.render_stateful_widget(list, sections[0], &mut state);
+
+    if let Some(date_picker) = &form.date_picker {
+        draw_insert_row_date_picker(frame, sections[1], date_picker);
+    }
+}
+
+fn draw_insert_row_date_picker(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    date_picker: &InsertRowDatePickerSnapshot,
+) {
+    let block = Block::bordered()
+        .border_style(Style::default().fg(theme_accent_color()))
+        .title(Span::styled(
+            if date_picker.time_value.is_some() {
+                format!("Date / Time Picker {}", date_picker.selected_value)
+            } else {
+                format!("Date Picker {}", date_picker.selected_value)
+            },
+            Style::default()
+                .fg(theme_accent_color())
+                .add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            date_picker.month_label.as_str(),
+            Style::default()
+                .fg(TEXT_STRONG)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            Span::styled("Mo ", Style::default().fg(TEXT_MUTED)),
+            Span::styled("Tu ", Style::default().fg(TEXT_MUTED)),
+            Span::styled("We ", Style::default().fg(TEXT_MUTED)),
+            Span::styled("Th ", Style::default().fg(TEXT_MUTED)),
+            Span::styled("Fr ", Style::default().fg(TEXT_MUTED)),
+            Span::styled("Sa ", Style::default().fg(TEXT_MUTED)),
+            Span::styled("Su", Style::default().fg(TEXT_MUTED)),
+        ]),
+    ];
+
+    let mut day = 1u8;
+    for week in 0..6 {
+        let mut spans = Vec::new();
+        for weekday in 0..7 {
+            let cell_index = week * 7 + weekday;
+            if cell_index < date_picker.first_weekday || day > date_picker.day_count {
+                spans.push(Span::raw("   "));
+                continue;
+            }
+
+            let style = if day == date_picker.selected_day {
+                highlight_style()
+            } else {
+                Style::default().fg(TEXT_DEFAULT)
+            };
+            spans.push(Span::styled(format!("{day:>2} "), style));
+            day += 1;
+        }
+        lines.push(Line::from(spans));
+        if day > date_picker.day_count {
+            break;
+        }
+    }
+
+    if let Some(time_value) = &date_picker.time_value {
+        lines.push(Line::from(vec![
+            Span::styled("Time ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(
+                time_value.as_str(),
+                Style::default()
+                    .fg(TEXT_STRONG)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(datetime_picker_segment_spans(
+            date_picker.active_segment,
+        )));
+        lines.push(Line::from(Span::styled(
+            "Left/Right segment  Up/Down adjust  t today  n now",
+            Style::default().fg(TEXT_MUTED),
+        )));
+        lines.push(Line::from(Span::styled(
+            "PgUp/PgDn month  Home/End year",
+            Style::default().fg(TEXT_MUTED),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "Left/Right day  Up/Down adjust  PgUp/PgDn month  Home/End year  t today",
+            Style::default().fg(TEXT_MUTED),
+        )));
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn datetime_picker_segment_spans(
+    active_segment: Option<InsertRowDateTimeSegmentView>,
+) -> Vec<Span<'static>> {
+    let mut spans = vec![Span::styled("Segment: ", Style::default().fg(TEXT_MUTED))];
+    for (index, (label, segment)) in [
+        ("day", InsertRowDateTimeSegmentView::Day),
+        ("hour", InsertRowDateTimeSegmentView::Hour),
+        ("minute", InsertRowDateTimeSegmentView::Minute),
+        ("second", InsertRowDateTimeSegmentView::Second),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let is_active = active_segment == Some(segment);
+        spans.push(Span::styled(
+            if is_active {
+                format!("[{label}]")
+            } else {
+                label.to_string()
+            },
+            if is_active {
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(TEXT_SECONDARY)
+            },
+        ));
+    }
+    spans
+}
+
 fn saved_sql_preview(sql: &str) -> String {
     sql.lines()
         .map(str::trim)
@@ -1872,6 +2106,8 @@ pub(super) fn draw_footer(frame: &mut Frame<'_>, area: Rect, view: WorkspaceView
         FOOTER_SAVED_SQL_HELP
     } else if view.save_sql_dialog.is_some() {
         FOOTER_SAVE_SQL_HELP
+    } else if view.insert_row_form_open {
+        FOOTER_INSERT_ROW_FORM_HELP
     } else if view.sql_history.is_some() {
         FOOTER_SQL_HISTORY_HELP
     } else if view.data_filter.is_some() {

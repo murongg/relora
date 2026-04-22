@@ -394,6 +394,36 @@ fn structure_tab_snapshot_shell() -> Result<AppShell> {
     Ok(AppShell::Workspace(app.into()))
 }
 
+fn insert_row_form_snapshot_shell() -> Result<AppShell> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "events")])],
+            vec![preview(
+                &["id", "scheduled_for", "title"],
+                &[&["1", "2026-04-20", "Launch"]],
+            )],
+            vec![columns(&[
+                ("id", "integer", false, true, true),
+                ("scheduled_for", "date", false, false, false),
+                ("title", "text", false, false, false),
+            ])],
+            vec![],
+        )),
+    }];
+    let mut app = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    app.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut app)?;
+    app.apply_action(WorkspaceAction::SelectRightDataTab)?;
+    app.apply_action(WorkspaceAction::FocusDataGrid)?;
+    app.apply_action(WorkspaceAction::OpenInsertRowForm)?;
+    for ch in "2026-04-21".chars() {
+        app.insert_insert_row_form_char(ch)?;
+    }
+    app.adjust_insert_row_form_date_days(1)?;
+    Ok(AppShell::Workspace(app.into()))
+}
+
 fn row_inspector_snapshot_render() -> Result<String> {
     let bootstraps = vec![ConnectionBootstrap {
         name: "pg".to_string(),
@@ -460,6 +490,13 @@ fn structure_tab_golden_snapshot() -> Result<()> {
     let shell = structure_tab_snapshot_shell()?;
     let rendered = render_app_shell(&shell, 140, 32)?;
     assert_matches_snapshot("workspace_structure_tab", &rendered)
+}
+
+#[test]
+fn insert_row_form_golden_snapshot() -> Result<()> {
+    let shell = insert_row_form_snapshot_shell()?;
+    let rendered = render_app_shell(&shell, 140, 32)?;
+    assert_matches_snapshot("workspace_insert_row_form", &rendered)
 }
 
 #[test]

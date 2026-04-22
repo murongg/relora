@@ -58,6 +58,52 @@ pub struct SaveSqlDialogView<'a> {
     pub name: &'a str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertRowFieldKindView {
+    Text,
+    Number,
+    Boolean,
+    Date,
+    DateTime,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertRowDateTimeSegmentView {
+    Day,
+    Hour,
+    Minute,
+    Second,
+}
+
+#[derive(Debug, Clone)]
+pub struct InsertRowFieldSnapshot {
+    pub name: String,
+    pub data_type: String,
+    pub value: String,
+    pub required: bool,
+    pub kind: InsertRowFieldKindView,
+}
+
+#[derive(Debug, Clone)]
+pub struct InsertRowDatePickerSnapshot {
+    pub month_label: String,
+    pub selected_value: String,
+    pub time_value: Option<String>,
+    pub active_segment: Option<InsertRowDateTimeSegmentView>,
+    pub first_weekday: usize,
+    pub day_count: u8,
+    pub selected_day: u8,
+}
+
+#[derive(Debug, Clone)]
+pub struct InsertRowFormSnapshot {
+    pub object_label: String,
+    pub selected_index: usize,
+    pub fields: Vec<InsertRowFieldSnapshot>,
+    pub date_picker: Option<InsertRowDatePickerSnapshot>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct DataFilterView<'a> {
     pub input: &'a str,
@@ -157,6 +203,7 @@ pub struct WorkspaceView<'a> {
     pub sql_history: Option<SqlHistoryView<'a>>,
     pub saved_sql: Option<SavedSqlView<'a>>,
     pub save_sql_dialog: Option<SaveSqlDialogView<'a>>,
+    pub insert_row_form_open: bool,
     pub data_filter: Option<DataFilterView<'a>>,
     pub cell_edit: Option<CellEditView<'a>>,
     pub row_inspector: Option<RowInspectorView<'a>>,

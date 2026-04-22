@@ -18,6 +18,7 @@ struct MockDriver {
     kind: DatabaseKind,
     catalogs: VecDeque<Catalog>,
     previews: VecDeque<TablePreview>,
+    columns: VecDeque<Vec<DbColumn>>,
     executions: VecDeque<Vec<SqlExecutionResult>>,
 }
 
@@ -50,8 +51,14 @@ impl MockDriver {
             kind: DatabaseKind::Postgres,
             catalogs: VecDeque::from(catalogs),
             previews: VecDeque::from(previews),
+            columns: VecDeque::new(),
             executions: VecDeque::new(),
         }
+    }
+
+    fn with_columns(mut self, columns: Vec<Vec<DbColumn>>) -> Self {
+        self.columns = VecDeque::from(columns);
+        self
     }
 
     fn with_executions(mut self, executions: Vec<Vec<SqlExecutionResult>>) -> Self {
@@ -124,7 +131,7 @@ impl DatabaseDriver for MockDriver {
     }
 
     fn load_object_columns(&mut self, _table: &DbObjectRef) -> Result<Vec<DbColumn>> {
-        Ok(Vec::new())
+        Ok(self.columns.pop_front().unwrap_or_default())
     }
 
     fn execute_sql(
@@ -247,6 +254,21 @@ fn preview(columns: &[&str], rows: &[&[&str]]) -> TablePreview {
             .map(|row| row.iter().map(|value| (*value).to_string()).collect())
             .collect(),
     }
+}
+
+fn columns(values: &[(&str, &str, bool, bool, bool)]) -> Vec<DbColumn> {
+    values
+        .iter()
+        .map(
+            |(name, data_type, nullable, has_default, is_primary_key)| DbColumn {
+                name: (*name).to_string(),
+                data_type: (*data_type).to_string(),
+                nullable: *nullable,
+                has_default: *has_default,
+                is_primary_key: *is_primary_key,
+            },
+        )
+        .collect()
 }
 
 fn query(columns: &[&str], rows: &[&[&str]]) -> Vec<SqlExecutionResult> {
@@ -555,6 +577,14 @@ fn data_grid_shortcuts_include_copy_filter_and_edit_actions() {
     assert_eq!(
         map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE)),
         Some(WorkspaceAction::StartCellEdit)
+    );
+    assert_eq!(
+        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+        Some(WorkspaceAction::OpenInsertRowForm)
+    );
+    assert_eq!(
+        map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT)),
+        Some(WorkspaceAction::PreviewDeleteCurrentRow)
     );
     assert_eq!(
         map_data_grid_key_to_action(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)),
@@ -1817,6 +1847,391 @@ fn browser_enter_on_a_table_returns_to_data_from_sql_tab() -> Result<()> {
 
     assert_eq!(app.active_right_tab(), RightPaneTab::Data);
     assert!(app.data_grid_focused());
+    Ok(())
+}
+
+#[test]
+fn insert_row_form_date_fields_accept_picker_navigation_keys() -> Result<()> {
+    let mut app = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(
+                MockDriver::new(
+                    vec![catalog("public", &[(DbObjectKind::Table, "events")])],
+                    vec![preview(
+                        &["id", "scheduled_for", "title"],
+                        &[&["1", "2026-04-20", "Launch"]],
+                    )],
+                )
+                .with_columns(vec![columns(&[
+                    ("id", "integer", false, true, true),
+                    ("scheduled_for", "date", false, false, false),
+                    ("title", "text", false, false, false),
+                ])]),
+            ),
+        }],
+        50,
+    )?;
+    app.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until(
+        &mut app,
+        |workspace| {
+            workspace
+                .view()
+                .structure
+                .is_some_and(|structure| !structure.loading && structure.columns.len() == 3)
+        },
+        "date insert form structure",
+    )?;
+    app.apply_action(WorkspaceAction::SelectRightDataTab)?;
+    app.apply_action(WorkspaceAction::FocusDataGrid)?;
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(KEY_DATA_GRID_INSERT_ROW), KeyModifiers::NONE),
+    )?;
+    for ch in "2026-04-21".chars() {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        )?;
+    }
+    handle_key(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))?;
+
+    let form = app
+        .insert_row_form_snapshot()
+        .expect("insert row form should stay visible");
+    assert!(form.date_picker.is_some());
+    assert_eq!(form.fields[form.selected_index].value, "2026-04-22");
+    Ok(())
+}
+
+#[test]
+fn insert_row_form_datetime_fields_accept_picker_navigation_keys() -> Result<()> {
+    let mut app = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(
+                MockDriver::new(
+                    vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                    vec![preview(
+                        &["id", "created_at", "name"],
+                        &[&["1", "2026-04-20 09:30:00", "Alice"]],
+                    )],
+                )
+                .with_columns(vec![columns(&[
+                    ("id", "integer", false, true, true),
+                    ("created_at", "timestamp", false, false, false),
+                    ("name", "text", false, false, false),
+                ])]),
+            ),
+        }],
+        50,
+    )?;
+    app.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until(
+        &mut app,
+        |workspace| {
+            workspace
+                .view()
+                .structure
+                .is_some_and(|structure| !structure.loading && structure.columns.len() == 3)
+        },
+        "datetime insert form structure",
+    )?;
+    app.apply_action(WorkspaceAction::SelectRightDataTab)?;
+    app.apply_action(WorkspaceAction::FocusDataGrid)?;
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(KEY_DATA_GRID_INSERT_ROW), KeyModifiers::NONE),
+    )?;
+    for ch in "2026-04-21 09:30:00".chars() {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        )?;
+    }
+    handle_key(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))?;
+    handle_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))?;
+    handle_key(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))?;
+    handle_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))?;
+    handle_key(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))?;
+    handle_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))?;
+
+    let form = app
+        .insert_row_form_snapshot()
+        .expect("insert row form should stay visible");
+    assert!(form.date_picker.is_some());
+    assert_eq!(
+        form.fields[form.selected_index].value,
+        "2026-04-21 10:31:01"
+    );
+    Ok(())
+}
+
+#[test]
+fn insert_row_form_datetime_fields_accept_time_picker_navigation_keys() -> Result<()> {
+    let mut app = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(
+                MockDriver::new(
+                    vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                    vec![preview(
+                        &["id", "created_at", "name"],
+                        &[&["1", "2026-04-20 09:30:00", "Alice"]],
+                    )],
+                )
+                .with_columns(vec![columns(&[
+                    ("id", "integer", false, true, true),
+                    ("created_at", "timestamp", false, false, false),
+                    ("name", "text", false, false, false),
+                ])]),
+            ),
+        }],
+        50,
+    )?;
+    app.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until(
+        &mut app,
+        |workspace| {
+            workspace
+                .view()
+                .structure
+                .is_some_and(|structure| !structure.loading && structure.columns.len() == 3)
+        },
+        "datetime time picker structure",
+    )?;
+    app.apply_action(WorkspaceAction::SelectRightDataTab)?;
+    app.apply_action(WorkspaceAction::FocusDataGrid)?;
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(KEY_DATA_GRID_INSERT_ROW), KeyModifiers::NONE),
+    )?;
+    for ch in "2026-04-21 09:30:00".chars() {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        )?;
+    }
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+    )?;
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('M'), KeyModifiers::SHIFT),
+    )?;
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT),
+    )?;
+
+    let form = app
+        .insert_row_form_snapshot()
+        .expect("insert row form should stay visible");
+    assert!(form.date_picker.is_some());
+    assert_eq!(
+        form.fields[form.selected_index].value,
+        "2026-04-21 10:31:01"
+    );
+    Ok(())
+}
+
+#[test]
+fn insert_row_form_datetime_fields_accept_shift_modified_time_picker_keys() -> Result<()> {
+    let mut app = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(
+                MockDriver::new(
+                    vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                    vec![preview(
+                        &["id", "created_at", "name"],
+                        &[&["1", "2026-04-20 09:30:00", "Alice"]],
+                    )],
+                )
+                .with_columns(vec![columns(&[
+                    ("id", "integer", false, true, true),
+                    ("created_at", "timestamp", false, false, false),
+                    ("name", "text", false, false, false),
+                ])]),
+            ),
+        }],
+        50,
+    )?;
+    app.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until(
+        &mut app,
+        |workspace| {
+            workspace
+                .view()
+                .structure
+                .is_some_and(|structure| !structure.loading && structure.columns.len() == 3)
+        },
+        "datetime shift time picker structure",
+    )?;
+    app.apply_action(WorkspaceAction::SelectRightDataTab)?;
+    app.apply_action(WorkspaceAction::FocusDataGrid)?;
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(KEY_DATA_GRID_INSERT_ROW), KeyModifiers::NONE),
+    )?;
+    for ch in "2026-04-21 09:30:00".chars() {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        )?;
+    }
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('m'), KeyModifiers::SHIFT),
+    )?;
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::SHIFT),
+    )?;
+
+    let form = app
+        .insert_row_form_snapshot()
+        .expect("insert row form should stay visible");
+    assert!(form.date_picker.is_some());
+    assert_eq!(
+        form.fields[form.selected_index].value,
+        "2026-04-21 09:31:01"
+    );
+    Ok(())
+}
+
+#[test]
+fn insert_row_form_datetime_picker_renders_time_shortcuts_hint() -> Result<()> {
+    let mut app = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(
+                MockDriver::new(
+                    vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                    vec![preview(
+                        &["id", "created_at", "name"],
+                        &[&["1", "2026-04-20 09:30:00", "Alice"]],
+                    )],
+                )
+                .with_columns(vec![columns(&[
+                    ("id", "integer", false, true, true),
+                    ("created_at", "timestamp", false, false, false),
+                    ("name", "text", false, false, false),
+                ])]),
+            ),
+        }],
+        50,
+    )?;
+    app.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until(
+        &mut app,
+        |workspace| {
+            workspace
+                .view()
+                .structure
+                .is_some_and(|structure| !structure.loading && structure.columns.len() == 3)
+        },
+        "datetime picker render structure",
+    )?;
+    app.apply_action(WorkspaceAction::SelectRightDataTab)?;
+    app.apply_action(WorkspaceAction::FocusDataGrid)?;
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(KEY_DATA_GRID_INSERT_ROW), KeyModifiers::NONE),
+    )?;
+    for ch in "2026-04-21 09:30:00".chars() {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        )?;
+    }
+
+    let backend = TestBackend::new(120, 36);
+    let mut terminal = Terminal::new(backend)?;
+    terminal.draw(|frame| draw(frame, &AppShell::Workspace(app.into())))?;
+
+    let buffer = terminal.backend().buffer();
+    let rendered = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Left/Right segment  Up/Down adjust  t today  n now"));
+    assert!(rendered.contains("Segment: [day] hour minute second"));
+    Ok(())
+}
+
+#[test]
+fn insert_row_form_down_key_adjusts_date_without_switching_fields() -> Result<()> {
+    let mut app = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(
+                MockDriver::new(
+                    vec![catalog("public", &[(DbObjectKind::Table, "events")])],
+                    vec![preview(
+                        &["id", "scheduled_for", "title"],
+                        &[&["1", "2026-04-20", "Launch"]],
+                    )],
+                )
+                .with_columns(vec![columns(&[
+                    ("id", "integer", false, true, true),
+                    ("scheduled_for", "date", false, false, false),
+                    ("title", "text", false, false, false),
+                ])]),
+            ),
+        }],
+        50,
+    )?;
+    app.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until(
+        &mut app,
+        |workspace| {
+            workspace
+                .view()
+                .structure
+                .is_some_and(|structure| !structure.loading && structure.columns.len() == 3)
+        },
+        "weekly date picker structure",
+    )?;
+    app.apply_action(WorkspaceAction::SelectRightDataTab)?;
+    app.apply_action(WorkspaceAction::FocusDataGrid)?;
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(KEY_DATA_GRID_INSERT_ROW), KeyModifiers::NONE),
+    )?;
+    for ch in "2026-04-21".chars() {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        )?;
+    }
+
+    let initial_form = app
+        .insert_row_form_snapshot()
+        .expect("insert row form should stay visible");
+    let selected_index = initial_form.selected_index;
+    assert_eq!(initial_form.fields[selected_index].name, "scheduled_for");
+
+    handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))?;
+
+    let form = app
+        .insert_row_form_snapshot()
+        .expect("insert row form should stay visible");
+    assert_eq!(form.selected_index, selected_index);
+    assert_eq!(form.fields[form.selected_index].name, "scheduled_for");
+    assert_eq!(form.fields[form.selected_index].value, "2026-04-20");
     Ok(())
 }
 

@@ -2656,6 +2656,312 @@ fn workspace_stages_cell_update_preview_sql_then_commits_transaction() -> Result
 }
 
 #[test]
+fn workspace_previews_insert_from_a_form_and_commits_transaction() -> Result<()> {
+    let executed_sql = Arc::new(Mutex::new(Vec::new()));
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(
+            MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(
+                    &["id", "email", "display_name"],
+                    &[&["1", "alice@example.com", "Alice"]],
+                )],
+                vec![],
+                vec![query_batch(vec![query(
+                    &["id", "email", "display_name"],
+                    &[&["2", "bob@example.com", "Bob"]],
+                )])],
+            )
+            .with_sql_recorder(executed_sql.clone()),
+        ),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::FocusDataGrid)?;
+    workspace.apply_action(WorkspaceAction::OpenInsertRowForm)?;
+    workspace.insert_insert_row_form_char('b')?;
+    workspace.insert_insert_row_form_char('o')?;
+    workspace.insert_insert_row_form_char('b')?;
+    workspace.insert_insert_row_form_char('@')?;
+    workspace.insert_insert_row_form_char('e')?;
+    workspace.insert_insert_row_form_char('x')?;
+    workspace.insert_insert_row_form_char('a')?;
+    workspace.insert_insert_row_form_char('m')?;
+    workspace.insert_insert_row_form_char('p')?;
+    workspace.insert_insert_row_form_char('l')?;
+    workspace.insert_insert_row_form_char('e')?;
+    workspace.insert_insert_row_form_char('.')?;
+    workspace.insert_insert_row_form_char('c')?;
+    workspace.insert_insert_row_form_char('o')?;
+    workspace.insert_insert_row_form_char('m')?;
+    workspace.apply_action(WorkspaceAction::NextInsertRowField)?;
+    workspace.insert_insert_row_form_char('B')?;
+    workspace.insert_insert_row_form_char('o')?;
+    workspace.insert_insert_row_form_char('b')?;
+    workspace.apply_action(WorkspaceAction::PreviewInsertRowForm)?;
+
+    let staged = workspace
+        .view()
+        .staged_crud
+        .expect("staged insert preview should be available");
+    assert!(
+        staged
+            .preview_sql
+            .contains("INSERT INTO \"public\".\"users\"")
+    );
+    assert!(staged.preview_sql.contains("\"email\""));
+    assert!(staged.preview_sql.contains("'bob@example.com'"));
+    assert!(staged.preview_sql.contains("\"display_name\""));
+    assert!(staged.preview_sql.contains("'Bob'"));
+    assert!(staged.preview_sql.contains("ROLLBACK;"));
+
+    workspace.apply_action(WorkspaceAction::CommitStagedCrud)?;
+    drain_until_idle(&mut workspace)?;
+
+    let recorded = executed_sql
+        .lock()
+        .expect("sql recorder lock should be available");
+    assert!(recorded[0].contains("BEGIN;"));
+    assert!(recorded[0].contains("INSERT INTO \"public\".\"users\""));
+    assert!(recorded[0].contains("COMMIT;"));
+    Ok(())
+}
+
+#[test]
+fn workspace_insert_row_form_supports_date_picker_navigation() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "events")])],
+            vec![preview(
+                &["id", "scheduled_for", "title"],
+                &[&["1", "2026-04-20", "Launch"]],
+            )],
+            vec![columns(&[
+                ("id", "integer", false, true, true),
+                ("scheduled_for", "date", false, false, false),
+                ("title", "text", false, false, false),
+            ])],
+            vec![query_batch(vec![query(
+                &["id", "scheduled_for", "title"],
+                &[&["2", "2026-04-22", "Launch review"]],
+            )])],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut workspace, "events")?;
+    workspace.apply_action(WorkspaceAction::SelectRightDataTab)?;
+    workspace.apply_action(WorkspaceAction::FocusDataGrid)?;
+    workspace.apply_action(WorkspaceAction::OpenInsertRowForm)?;
+
+    let initial_form = workspace
+        .insert_row_form_snapshot()
+        .expect("insert row form should be visible");
+    assert_eq!(
+        initial_form.fields[initial_form.selected_index].name,
+        "scheduled_for"
+    );
+    assert_eq!(
+        initial_form.fields[initial_form.selected_index].data_type,
+        "date"
+    );
+    assert!(
+        initial_form.date_picker.is_some(),
+        "date fields should expose a date picker"
+    );
+
+    for ch in "2026-04-21".chars() {
+        workspace.insert_insert_row_form_char(ch)?;
+    }
+    workspace.adjust_insert_row_form_date_days(1)?;
+
+    let nudged_form = workspace
+        .insert_row_form_snapshot()
+        .expect("insert row form should remain visible");
+    assert_eq!(
+        nudged_form.fields[nudged_form.selected_index].value,
+        "2026-04-22"
+    );
+
+    workspace.apply_action(WorkspaceAction::NextInsertRowField)?;
+    for ch in "Launch review".chars() {
+        workspace.insert_insert_row_form_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::PreviewInsertRowForm)?;
+
+    let staged = workspace
+        .view()
+        .staged_crud
+        .expect("staged insert preview should be available");
+    assert!(staged.preview_sql.contains("'2026-04-22'"));
+    assert!(staged.preview_sql.contains("'Launch review'"));
+    Ok(())
+}
+
+#[test]
+fn workspace_insert_row_form_supports_datetime_picker_navigation() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(
+                &["id", "created_at", "name"],
+                &[&["1", "2026-04-20 09:30:00", "Alice"]],
+            )],
+            vec![columns(&[
+                ("id", "integer", false, true, true),
+                ("created_at", "timestamp", false, false, false),
+                ("name", "text", false, false, false),
+            ])],
+            vec![query_batch(vec![query(
+                &["id", "created_at", "name"],
+                &[&["2", "2026-04-22 09:30:00", "Bob"]],
+            )])],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut workspace, "users")?;
+    workspace.apply_action(WorkspaceAction::SelectRightDataTab)?;
+    workspace.apply_action(WorkspaceAction::FocusDataGrid)?;
+    workspace.apply_action(WorkspaceAction::OpenInsertRowForm)?;
+
+    let initial_form = workspace
+        .insert_row_form_snapshot()
+        .expect("insert row form should be visible");
+    assert_eq!(
+        initial_form.fields[initial_form.selected_index].name,
+        "created_at"
+    );
+    assert_eq!(
+        initial_form.fields[initial_form.selected_index].data_type,
+        "timestamp"
+    );
+    assert!(
+        initial_form.date_picker.is_some(),
+        "datetime fields should expose a date picker too"
+    );
+
+    for ch in "2026-04-21 09:30:00".chars() {
+        workspace.insert_insert_row_form_char(ch)?;
+    }
+    workspace.adjust_insert_row_form_date_days(1)?;
+
+    let nudged_form = workspace
+        .insert_row_form_snapshot()
+        .expect("insert row form should remain visible");
+    assert_eq!(
+        nudged_form.fields[nudged_form.selected_index].value,
+        "2026-04-22 09:30:00"
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_insert_row_form_supports_datetime_time_picker_navigation() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(
+                &["id", "created_at", "name"],
+                &[&["1", "2026-04-20 09:30:00", "Alice"]],
+            )],
+            vec![columns(&[
+                ("id", "integer", false, true, true),
+                ("created_at", "timestamp", false, false, false),
+                ("name", "text", false, false, false),
+            ])],
+            vec![query_batch(vec![query(
+                &["id", "created_at", "name"],
+                &[&["2", "2026-04-21 10:31:01", "Bob"]],
+            )])],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut workspace, "users")?;
+    workspace.apply_action(WorkspaceAction::SelectRightDataTab)?;
+    workspace.apply_action(WorkspaceAction::FocusDataGrid)?;
+    workspace.apply_action(WorkspaceAction::OpenInsertRowForm)?;
+
+    for ch in "2026-04-21 09:30:00".chars() {
+        workspace.insert_insert_row_form_char(ch)?;
+    }
+    workspace.adjust_insert_row_form_time_hours(1)?;
+    workspace.adjust_insert_row_form_time_minutes(1)?;
+    workspace.adjust_insert_row_form_time_seconds(1)?;
+
+    let nudged_form = workspace
+        .insert_row_form_snapshot()
+        .expect("insert row form should remain visible");
+    assert_eq!(
+        nudged_form.fields[nudged_form.selected_index].value,
+        "2026-04-21 10:31:01"
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_insert_row_form_auto_loads_column_types_for_typed_inputs() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "posts")])],
+            vec![preview(
+                &["id", "user_id", "title", "content", "created_at"],
+                &[&["1", "7", "hello", "body", "2026-04-20 09:30:00"]],
+            )],
+            vec![columns(&[
+                ("id", "integer", false, true, true),
+                ("user_id", "integer", false, false, false),
+                ("title", "text", false, false, false),
+                ("content", "text", true, false, false),
+                ("created_at", "timestamp", false, false, false),
+            ])],
+            vec![],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::FocusDataGrid)?;
+    workspace.apply_action(WorkspaceAction::OpenInsertRowForm)?;
+
+    let initial_form = workspace
+        .insert_row_form_snapshot()
+        .expect("insert row form should be visible immediately");
+    assert!(
+        initial_form
+            .fields
+            .iter()
+            .all(|field| field.data_type.is_empty()),
+        "the initial form should still open from preview columns while structure loads"
+    );
+
+    drain_until_idle(&mut workspace)?;
+
+    let typed_form = workspace
+        .insert_row_form_snapshot()
+        .expect("insert row form should remain visible after loading column types");
+    let created_at = typed_form
+        .fields
+        .iter()
+        .find(|field| field.name == "created_at")
+        .expect("created_at field should exist");
+    assert_eq!(created_at.data_type, "timestamp");
+    assert!(
+        typed_form.date_picker.is_none(),
+        "date picker should stay tied to the selected field"
+    );
+    Ok(())
+}
+
+#[test]
 fn workspace_stages_mysql_cell_update_without_returning() -> Result<()> {
     let bootstraps = vec![ConnectionBootstrap {
         name: "mysql".to_string(),
@@ -2693,6 +2999,62 @@ fn workspace_stages_mysql_cell_update_without_returning() -> Result<()> {
     assert!(staged.preview_sql.contains("SELECT *"));
     assert!(staged.preview_sql.contains("WHERE `id` = '1'"));
     assert!(!staged.preview_sql.contains("RETURNING *;"));
+    Ok(())
+}
+
+#[test]
+fn workspace_stages_current_row_delete_and_commits_transaction() -> Result<()> {
+    let executed_sql = Arc::new(Mutex::new(Vec::new()));
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(
+            MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id", "email"], &[&["1", "alice@example.com"]])],
+                vec![],
+                vec![query_batch(vec![query(&["id"], &[&["1"]])])],
+            )
+            .with_sql_recorder(executed_sql.clone()),
+        ),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::FocusDataGrid)?;
+    workspace.apply_action(WorkspaceAction::PreviewDeleteCurrentRow)?;
+
+    let staged = workspace
+        .view()
+        .staged_crud
+        .expect("staged delete preview should be available");
+    assert!(
+        staged
+            .preview_sql
+            .contains("DELETE FROM \"public\".\"users\"")
+    );
+    assert!(staged.preview_sql.contains("WHERE \"id\" = '1'"));
+    assert!(staged.preview_sql.contains("ROLLBACK;"));
+    assert!(
+        workspace
+            .editor_snapshot()
+            .expect("preview SQL should open in the SQL editor")
+            .sql
+            .contains("DELETE FROM \"public\".\"users\"")
+    );
+
+    workspace.apply_action(WorkspaceAction::CommitStagedCrud)?;
+    assert!(
+        workspace.view().delete_confirmation.is_some(),
+        "staged delete commit should still require confirmation"
+    );
+    workspace.apply_action(WorkspaceAction::ConfirmDeleteOperation)?;
+    drain_until_idle(&mut workspace)?;
+
+    let recorded = executed_sql
+        .lock()
+        .expect("sql recorder lock should be available");
+    assert!(recorded[0].contains("BEGIN;"));
+    assert!(recorded[0].contains("DELETE FROM \"public\".\"users\""));
+    assert!(recorded[0].contains("COMMIT;"));
     Ok(())
 }
 

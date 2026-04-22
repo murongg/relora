@@ -25,6 +25,7 @@ fn workspace_can_return_to_launcher(workspace: &WorkspaceApp) -> bool {
         && !workspace.command_palette_open()
         && !workspace.saved_sql_open()
         && !workspace.save_sql_dialog_open()
+        && !workspace.insert_row_form_open()
         && !workspace.sql_history_open()
         && !workspace.data_filter_open()
         && !workspace.cell_edit_open()
@@ -57,6 +58,10 @@ pub(super) fn handle_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
 
     if app.save_sql_dialog_open() {
         return handle_save_sql_dialog_key(app, key);
+    }
+
+    if app.insert_row_form_open() {
+        return handle_insert_row_form_key(app, key);
     }
 
     if app.sql_history_open() {
@@ -506,6 +511,74 @@ pub(super) fn handle_save_sql_dialog_key(app: &mut WorkspaceApp, key: KeyEvent) 
     }
 }
 
+pub(super) fn handle_insert_row_form_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return match key.code {
+            KeyCode::Char('u') | KeyCode::Char('U') => app.clear_insert_row_form_field(),
+            _ => Ok(()),
+        };
+    }
+
+    if app.insert_row_form_selected_field_supports_time_picker() {
+        match key.code {
+            KeyCode::Left => return app.move_insert_row_form_time_segment(-1),
+            KeyCode::Right => return app.move_insert_row_form_time_segment(1),
+            KeyCode::Up => return app.adjust_insert_row_form_active_time_segment(1),
+            KeyCode::Down => return app.adjust_insert_row_form_active_time_segment(-1),
+            KeyCode::PageUp => return app.adjust_insert_row_form_date_months(-1),
+            KeyCode::PageDown => return app.adjust_insert_row_form_date_months(1),
+            KeyCode::Home => return app.adjust_insert_row_form_date_years(-1),
+            KeyCode::End => return app.adjust_insert_row_form_date_years(1),
+            KeyCode::Char('t') => return app.set_insert_row_form_date_today(),
+            KeyCode::Char('n') => return app.set_insert_row_form_datetime_now(),
+            KeyCode::Char('h') => return app.adjust_insert_row_form_time_hours(-1),
+            KeyCode::Char('l') => return app.adjust_insert_row_form_time_hours(1),
+            KeyCode::Char('m') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                return app.adjust_insert_row_form_time_minutes(1);
+            }
+            KeyCode::Char('m') => return app.adjust_insert_row_form_time_minutes(-1),
+            KeyCode::Char('M') => return app.adjust_insert_row_form_time_minutes(1),
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                return app.adjust_insert_row_form_time_seconds(1);
+            }
+            KeyCode::Char('s') => return app.adjust_insert_row_form_time_seconds(-1),
+            KeyCode::Char('S') => return app.adjust_insert_row_form_time_seconds(1),
+            _ => {}
+        }
+    }
+
+    if app.insert_row_form_selected_field_supports_date_picker() {
+        match key.code {
+            KeyCode::Left => return app.adjust_insert_row_form_date_days(-1),
+            KeyCode::Right => return app.adjust_insert_row_form_date_days(1),
+            KeyCode::Up => return app.adjust_insert_row_form_date_days(1),
+            KeyCode::Down => return app.adjust_insert_row_form_date_days(-1),
+            KeyCode::PageUp => return app.adjust_insert_row_form_date_months(-1),
+            KeyCode::PageDown => return app.adjust_insert_row_form_date_months(1),
+            KeyCode::Home => return app.adjust_insert_row_form_date_years(-1),
+            KeyCode::End => return app.adjust_insert_row_form_date_years(1),
+            KeyCode::Char('t') => return app.set_insert_row_form_date_today(),
+            _ => {}
+        }
+    }
+
+    match key.code {
+        KeyCode::Esc => app.apply_action(WorkspaceAction::CloseInsertRowForm),
+        KeyCode::Enter => app.apply_action(WorkspaceAction::PreviewInsertRowForm),
+        KeyCode::Tab | KeyCode::Char(KEY_BROWSER_DOWN) => {
+            app.apply_action(WorkspaceAction::NextInsertRowField)
+        }
+        KeyCode::BackTab | KeyCode::Char(KEY_BROWSER_UP) => {
+            app.apply_action(WorkspaceAction::PreviousInsertRowField)
+        }
+        KeyCode::Backspace => app.backspace_insert_row_form(),
+        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.insert_insert_row_form_char(ch)
+        }
+        _ => Ok(()),
+    }
+}
+
 pub(super) fn handle_data_filter_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::Esc => app.apply_action(WorkspaceAction::CloseDataFilter),
@@ -732,6 +805,8 @@ pub(super) fn map_data_grid_key_to_action(key: KeyEvent) -> Option<WorkspaceActi
         KeyCode::Char(KEY_DATA_GRID_COPY_CELL) => Some(WorkspaceAction::CopyCurrentCell),
         KeyCode::Char(KEY_DATA_GRID_COPY_WHERE) => Some(WorkspaceAction::CopyCurrentWhereClause),
         KeyCode::Char(KEY_DATA_GRID_EDIT_CELL) => Some(WorkspaceAction::StartCellEdit),
+        KeyCode::Char(KEY_DATA_GRID_INSERT_ROW) => Some(WorkspaceAction::OpenInsertRowForm),
+        KeyCode::Char(KEY_DATA_GRID_DELETE_ROW) => Some(WorkspaceAction::PreviewDeleteCurrentRow),
         KeyCode::Char(KEY_DATA_GRID_NEXT_PAGE) => Some(WorkspaceAction::NextPreviewPage),
         KeyCode::Char(KEY_DATA_GRID_PREVIOUS_PAGE) => Some(WorkspaceAction::PreviousPreviewPage),
         KeyCode::Char(KEY_DATA_GRID_SHRINK_COLUMN) => {

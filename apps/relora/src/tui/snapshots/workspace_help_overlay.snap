@@ -12,8 +12,8 @@
           │/            Open data filter                 Tab          Cycle editor, results, and   │          
           │n / p        Load next or previous page       assets                                    │          
           │y / Y / w    Copy row, cell, or WHERE                                                   │          
-          │i            Stage selected cell edit         Structure                                 │          
-          │                                              F4 / Alt-3   Switch to structure tab      │          
+          │a / D / i    Open INSERT, stage DELETE row, orStructure                                 │          
+          │stage cell edit                               F4 / Alt-3   Switch to structure tab      │          
           │                                              Tab          Focus structure grid         │          
           │                                              Enter        Inspect selected field or row│          
           │                                              [ / ] / =    Resize or reset column width │          

@@ -111,6 +111,81 @@ pub fn staged_update_sql(
     })
 }
 
+pub fn staged_delete_sql(
+    capabilities: DriverCapabilities,
+    object: &DbObjectRef,
+    grid: &TablePreview,
+    row_index: usize,
+    key_columns: &[String],
+) -> Option<StagedCrudSql> {
+    let row = grid.rows.get(row_index)?;
+    let predicate = where_clause_for_row(
+        capabilities.identifier_quote_style,
+        &grid.columns,
+        row,
+        key_columns,
+    );
+    if predicate.is_empty() {
+        return None;
+    }
+
+    let delete_statement = format!(
+        "DELETE FROM {}\nWHERE {}",
+        qualified_name(capabilities.identifier_quote_style, object),
+        predicate
+    );
+    let result_statement = if capabilities.supports_returning {
+        format!("{delete_statement}\nRETURNING *;")
+    } else {
+        format!("{delete_statement};")
+    };
+    let preview_sql = format!("BEGIN;\n{result_statement}\nROLLBACK;");
+    let commit_sql = format!("BEGIN;\n{result_statement}\nCOMMIT;");
+    Some(StagedCrudSql {
+        preview_sql,
+        commit_sql,
+    })
+}
+
+pub fn staged_insert_sql(
+    capabilities: DriverCapabilities,
+    object: &DbObjectRef,
+    values: &[(String, String)],
+) -> Option<StagedCrudSql> {
+    if values.is_empty() {
+        return None;
+    }
+
+    let column_list = values
+        .iter()
+        .map(|(name, _)| quote_identifier(capabilities.identifier_quote_style, name))
+        .collect::<Vec<_>>()
+        .join(",\n    ");
+    let value_list = values
+        .iter()
+        .map(|(_, value)| quote_literal(value))
+        .collect::<Vec<_>>()
+        .join(",\n    ");
+
+    let insert_statement = format!(
+        "INSERT INTO {} (\n    {}\n)\nVALUES (\n    {}\n)",
+        qualified_name(capabilities.identifier_quote_style, object),
+        column_list,
+        value_list
+    );
+    let result_statement = if capabilities.supports_returning {
+        format!("{insert_statement}\nRETURNING *;")
+    } else {
+        format!("{insert_statement};")
+    };
+    let preview_sql = format!("BEGIN;\n{result_statement}\nROLLBACK;");
+    let commit_sql = format!("BEGIN;\n{result_statement}\nCOMMIT;");
+    Some(StagedCrudSql {
+        preview_sql,
+        commit_sql,
+    })
+}
+
 pub fn primary_key_names(columns: &[DbColumn]) -> Vec<String> {
     columns
         .iter()
@@ -202,5 +277,43 @@ mod tests {
         assert!(sql.preview_sql.contains("SELECT *"));
         assert!(sql.preview_sql.contains("WHERE `id` = '1';"));
         assert!(!sql.preview_sql.contains("RETURNING *;"));
+    }
+
+    #[test]
+    fn mysql_staged_delete_uses_backticks_without_returning() {
+        let sql = staged_delete_sql(
+            DriverCapabilities::for_kind(DatabaseKind::MySql),
+            &object(),
+            &grid(),
+            0,
+            &["id".to_string()],
+        )
+        .expect("mysql staged delete should be generated");
+
+        assert!(sql.preview_sql.contains("DELETE FROM `public`.`users`"));
+        assert!(sql.preview_sql.contains("WHERE `id` = '1'"));
+        assert!(sql.preview_sql.contains("ROLLBACK;"));
+        assert!(!sql.preview_sql.contains("RETURNING *;"));
+        assert!(sql.commit_sql.contains("COMMIT;"));
+    }
+
+    #[test]
+    fn postgres_staged_insert_uses_returning() {
+        let sql = staged_insert_sql(
+            DriverCapabilities::for_kind(DatabaseKind::Postgres),
+            &object(),
+            &[
+                ("email".to_string(), "alice@example.com".to_string()),
+                ("display_name".to_string(), "Alice".to_string()),
+            ],
+        )
+        .expect("postgres staged insert should be generated");
+
+        assert!(sql.preview_sql.contains("INSERT INTO \"public\".\"users\""));
+        assert!(sql.preview_sql.contains("\"email\""));
+        assert!(sql.preview_sql.contains("'alice@example.com'"));
+        assert!(sql.preview_sql.contains("RETURNING *;"));
+        assert!(sql.preview_sql.contains("ROLLBACK;"));
+        assert!(sql.commit_sql.contains("COMMIT;"));
     }
 }

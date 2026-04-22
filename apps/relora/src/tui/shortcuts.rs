@@ -23,6 +23,8 @@ pub(super) const KEY_DATA_GRID_COPY_ROW: char = 'y';
 pub(super) const KEY_DATA_GRID_COPY_CELL: char = 'Y';
 pub(super) const KEY_DATA_GRID_COPY_WHERE: char = 'w';
 pub(super) const KEY_DATA_GRID_EDIT_CELL: char = 'i';
+pub(super) const KEY_DATA_GRID_INSERT_ROW: char = 'a';
+pub(super) const KEY_DATA_GRID_DELETE_ROW: char = 'D';
 pub(super) const KEY_DATA_GRID_NEXT_PAGE: char = 'n';
 pub(super) const KEY_DATA_GRID_PREVIOUS_PAGE: char = 'p';
 pub(super) const KEY_DATA_GRID_SHRINK_COLUMN: char = '[';
@@ -107,6 +109,7 @@ pub(super) const FOOTER_SAVED_SQL_HELP: &str =
 pub(super) const FOOTER_DATA_FILTER_HELP: &str =
     "Data filter: type quick filter, Enter apply, Esc close";
 pub(super) const FOOTER_SAVE_SQL_HELP: &str = "Save SQL: type a name, Enter save, Esc close";
+pub(super) const FOOTER_INSERT_ROW_FORM_HELP: &str = "Insert row: Tab/j/k switch field, type value, date arrows/PgUp/Home adjust, datetime Left/Right segment Up/Down adjust, Ctrl-U clear, Enter preview SQL";
 pub(super) const FOOTER_CELL_EDIT_HELP: &str =
     "Cell edit: type new value, Enter preview staged SQL, Esc close";
 pub(super) const FOOTER_ROW_INSPECTOR_HELP: &str = "Cell details: Tab switch box, j/k move or scroll, PgUp/PgDn or Ctrl-U/Ctrl-D scroll, y copy, i edit, f raw/formatted";
@@ -124,7 +127,7 @@ pub(super) const FOOTER_STRUCTURE_GRID_HELP: &str =
 pub(super) const FOOTER_STRUCTURE_HELP: &str =
     "Structure tab: Tab fields, F2 Data, F3 SQL, r refresh, Ctrl-P command";
 pub(super) const FOOTER_DATA_GRID_HELP: &str =
-    "Data tab: / filter, n/p page, y row, Y cell, w WHERE, i stage edit, [/] resize, f freeze";
+    "Data tab: / filter, a insert, D delete, i stage edit, y row, Y cell, w WHERE, n/p page";
 pub(super) const FOOTER_DATA_HELP: &str =
     "Data tab: / filter, n/p page, F3 SQL, F4 Structure, j/k assets, Tab grid, e SQL, Ctrl-O/F10";
 
@@ -141,7 +144,10 @@ pub(super) const HELP_DATA_SHORTCUTS: [(&str, &str); 5] = [
     ("/", "Open data filter"),
     ("n / p", "Load next or previous page"),
     ("y / Y / w", "Copy row, cell, or WHERE"),
-    ("i", "Stage selected cell edit"),
+    (
+        "a / D / i",
+        "Open INSERT, stage DELETE row, or stage cell edit",
+    ),
 ];
 
 pub(super) const HELP_SQL_SHORTCUTS: [(&str, &str); 8] = [

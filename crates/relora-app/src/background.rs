@@ -344,22 +344,30 @@ fn worker_loop(
                                                 && candidate.kind == object.kind
                                         }) =>
                                     {
-                                        let preview = match &preview_filter {
-                                            Some(filter) => driver
-                                                .load_filtered_preview_page(
-                                                    &object,
-                                                    filter,
-                                                    preview_limit,
-                                                    preview_offset,
-                                                )
-                                                .map_err(|error| error.to_string()),
-                                            None => driver
-                                                .load_preview_page(
-                                                    &object,
-                                                    preview_limit,
-                                                    preview_offset,
-                                                )
-                                                .map_err(|error| error.to_string()),
+                                        let preview = if object.kind.supports_data_preview() {
+                                            match &preview_filter {
+                                                Some(filter) => driver
+                                                    .load_filtered_preview_page(
+                                                        &object,
+                                                        filter,
+                                                        preview_limit,
+                                                        preview_offset,
+                                                    )
+                                                    .map_err(|error| error.to_string()),
+                                                None => driver
+                                                    .load_preview_page(
+                                                        &object,
+                                                        preview_limit,
+                                                        preview_offset,
+                                                    )
+                                                    .map_err(|error| error.to_string()),
+                                            }
+                                        } else {
+                                            Err(format!(
+                                                "Data preview is not available for {} {}.",
+                                                object.kind.label(),
+                                                object.qualified_name()
+                                            ))
                                         };
                                         (Some(object.clone()), Some(preview))
                                     }

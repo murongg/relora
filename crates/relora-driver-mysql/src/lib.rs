@@ -428,7 +428,9 @@ fn mysql_table_type(kind: DbObjectKind) -> Option<&'static str> {
     match kind {
         DbObjectKind::Table => Some("BASE TABLE"),
         DbObjectKind::View => Some("VIEW"),
+        DbObjectKind::MaterializedView => None,
         DbObjectKind::ForeignTable => None,
+        DbObjectKind::Function => None,
     }
 }
 

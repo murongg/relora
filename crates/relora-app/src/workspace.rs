@@ -602,9 +602,13 @@ impl WorkspaceApp {
                     .selected_object()
                     .cloned()
                     .map(|object| {
-                        driver
-                            .load_preview(&object, preview_limit)
-                            .map_err(|error| error.to_string())
+                        if object.kind.supports_data_preview() {
+                            driver
+                                .load_preview(&object, preview_limit)
+                                .map_err(|error| error.to_string())
+                        } else {
+                            Err(preview_unavailable_message(&object))
+                        }
                     })
                     .unwrap_or_else(|| Ok(TablePreview::default()));
                 app.apply_preview_result(preview_result);
@@ -1117,8 +1121,14 @@ impl WorkspaceApp {
             selected_schema_view_count: self
                 .object_count_for_selected_schema(DbObjectKind::View)
                 .unwrap_or_default(),
+            selected_schema_materialized_view_count: self
+                .object_count_for_selected_schema(DbObjectKind::MaterializedView)
+                .unwrap_or_default(),
             selected_schema_foreign_table_count: self
                 .object_count_for_selected_schema(DbObjectKind::ForeignTable)
+                .unwrap_or_default(),
+            selected_schema_function_count: self
+                .object_count_for_selected_schema(DbObjectKind::Function)
                 .unwrap_or_default(),
         }
     }
@@ -1481,7 +1491,7 @@ impl WorkspaceApp {
             TreeNodeKey::SavedQuery {
                 connection, name, ..
             } => self.open_saved_sql_named(connection, &name),
-            TreeNodeKey::Object { .. } => {
+            TreeNodeKey::Object { object, .. } if object.kind.supports_data_preview() => {
                 let should_schedule_preview = self
                     .selected_connection_index()
                     .and_then(|index| self.sessions.get(index))
@@ -1495,6 +1505,7 @@ impl WorkspaceApp {
                     Ok(())
                 }
             }
+            TreeNodeKey::Object { .. } => self.open_sql_editor(),
             _ => self.toggle_selected(),
         }
     }
@@ -2140,9 +2151,7 @@ impl WorkspaceApp {
             return Ok(());
         }
 
-        let (connection_index, object) = self
-            .selected_object_target()
-            .ok_or_else(|| anyhow!("select a table-like object first"))?;
+        let (connection_index, object) = self.selected_preview_target()?;
         let page_size = self.selected_preview_limit().unwrap_or(100) * PREVIEW_PAGE_STEP_MULTIPLIER;
         let next_offset = self.preview_page_offset.saturating_add(page_size);
         if let Some(filter) = self.active_data_filter.clone() {
@@ -2172,9 +2181,7 @@ impl WorkspaceApp {
             return Ok(());
         }
 
-        let (connection_index, object) = self
-            .selected_object_target()
-            .ok_or_else(|| anyhow!("select a table-like object first"))?;
+        let (connection_index, object) = self.selected_preview_target()?;
         let page_size = self.selected_preview_limit().unwrap_or(100) * PREVIEW_PAGE_STEP_MULTIPLIER;
         let previous_offset = self.preview_page_offset.saturating_sub(page_size);
         if let Some(filter) = self.active_data_filter.clone() {
@@ -2506,9 +2513,7 @@ impl WorkspaceApp {
     }
 
     fn open_data_filter(&mut self) -> Result<()> {
-        if self.selected_object().is_none() {
-            return Err(anyhow!("select a table-like object before filtering data"));
-        }
+        self.selected_preview_target()?;
         self.select_right_tab(RightPaneTab::Data);
         self.data_filter = Some(DataFilterState {
             input: self.active_data_filter.clone().unwrap_or_default(),
@@ -2532,9 +2537,7 @@ impl WorkspaceApp {
         self.active_data_filter = (!filter.is_empty()).then_some(filter.clone());
         self.reset_preview_pagination();
 
-        let (connection_index, object) = self
-            .selected_object_target()
-            .ok_or_else(|| anyhow!("select a table-like object before filtering data"))?;
+        let (connection_index, object) = self.selected_preview_target()?;
 
         if filter.is_empty() {
             self.schedule_preview_for_connection_object(connection_index, object)
@@ -2591,6 +2594,11 @@ impl WorkspaceApp {
         let (connection_index, object) = self
             .selected_object_target()
             .ok_or_else(|| anyhow!("select a table-like object before editing a row"))?;
+        if !object.kind.supports_staged_crud() {
+            return Err(anyhow!(
+                "staged row editing is only available for tables and foreign tables"
+            ));
+        }
         let grid = self.active_grid();
         let row_index = self.grid_selected_row_index();
         let column_index = self.grid_selected_column_index();
@@ -2960,18 +2968,45 @@ impl WorkspaceApp {
             return Ok(());
         };
 
-        let session = self
-            .sessions
-            .get_mut(connection)
-            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
-        session
-            .app
-            .select_object_locally(&object.database, &object.schema, &object.name)?;
+        let structure_active = self.active_right_tab == RightPaneTab::Structure;
+        {
+            let session = self
+                .sessions
+                .get_mut(connection)
+                .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+            session
+                .app
+                .select_object_locally(&object.database, &object.schema, &object.name)?;
+
+            if !object.kind.supports_data_preview() {
+                session.app.clear_preview();
+                session.app.set_status(preview_unavailable_message(&object));
+            }
+        }
+
+        if !object.kind.supports_data_preview() {
+            self.preview_has_next_page = false;
+            if structure_active {
+                self.schedule_structure_for_connection_object(connection, object)?;
+            }
+            return Ok(());
+        }
+
         self.schedule_preview_for_connection_object(connection, object.clone())?;
-        if self.active_right_tab == RightPaneTab::Structure {
+        if structure_active {
             self.schedule_structure_for_connection_object(connection, object)?;
         }
         Ok(())
+    }
+
+    fn selected_preview_target(&self) -> Result<(usize, DbObjectRef)> {
+        let (connection_index, object) = self
+            .selected_object_target()
+            .ok_or_else(|| anyhow!("select a previewable object first"))?;
+        if !object.kind.supports_data_preview() {
+            return Err(anyhow!(preview_unavailable_message(&object)));
+        }
+        Ok((connection_index, object))
     }
 
     fn open_sql_editor(&mut self) -> Result<()> {
@@ -3531,8 +3566,10 @@ impl WorkspaceApp {
             .cloned()
             .ok_or_else(|| anyhow!("select a table object first"))?;
 
-        if object.kind == DbObjectKind::View {
-            return Err(anyhow!("CRUD templates are only available for tables"));
+        if !object.kind.supports_crud_templates() {
+            return Err(anyhow!(
+                "CRUD templates are only available for tables and foreign tables"
+            ));
         }
 
         Ok((connection_index, object))
@@ -3600,6 +3637,17 @@ impl WorkspaceApp {
         offset: usize,
         clear_existing: bool,
     ) -> Result<()> {
+        if !object.kind.supports_data_preview() {
+            let session = self
+                .sessions
+                .get_mut(connection_index)
+                .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+            session.app.clear_preview();
+            session.app.set_status(preview_unavailable_message(&object));
+            self.preview_has_next_page = false;
+            return Ok(());
+        }
+
         self.reset_grid_scroll();
         let session = self
             .sessions
@@ -3630,6 +3678,17 @@ impl WorkspaceApp {
         offset: usize,
         clear_existing: bool,
     ) -> Result<()> {
+        if !object.kind.supports_data_preview() {
+            let session = self
+                .sessions
+                .get_mut(connection_index)
+                .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+            session.app.clear_preview();
+            session.app.set_status(preview_unavailable_message(&object));
+            self.preview_has_next_page = false;
+            return Ok(());
+        }
+
         self.reset_grid_scroll();
         let session = self
             .sessions
@@ -4863,7 +4922,7 @@ fn build_rows_for_session(
 
             for kind in DbObjectKind::ordered() {
                 let object_count = schema.object_count(kind);
-                if object_count == 0 {
+                if !should_show_object_group_nav(session.kind, kind, object_count) {
                     continue;
                 }
 
@@ -4933,7 +4992,7 @@ fn build_rows_for_session(
                 &schema.name,
                 database.schemas.len(),
             );
-            if !saved_queries.is_empty() {
+            if should_show_saved_queries_group_nav(saved_queries.len()) {
                 let group_key = (database.name.clone(), schema.name.clone());
                 let group_expanded = session.expanded_saved_query_groups.contains(&group_key);
                 rows.push(TreeEntry {
@@ -4975,6 +5034,28 @@ fn build_rows_for_session(
     }
 
     rows
+}
+
+fn should_show_object_group_nav(
+    database_kind: DatabaseKind,
+    kind: DbObjectKind,
+    object_count: usize,
+) -> bool {
+    if object_count > 0 {
+        return true;
+    }
+
+    match kind {
+        DbObjectKind::View => true,
+        DbObjectKind::MaterializedView | DbObjectKind::Function => {
+            database_kind == DatabaseKind::Postgres
+        }
+        DbObjectKind::Table | DbObjectKind::ForeignTable => false,
+    }
+}
+
+fn should_show_saved_queries_group_nav(_saved_query_count: usize) -> bool {
+    true
 }
 
 fn saved_queries_for_schema<'a>(
@@ -5059,6 +5140,14 @@ fn session_selected_object_matches(session: &ConnectionSession, object: &DbObjec
 fn loading_preview_message(object: &DbObjectRef) -> String {
     format!(
         "Loading preview for {} {}...",
+        object.kind.label(),
+        object.qualified_name()
+    )
+}
+
+fn preview_unavailable_message(object: &DbObjectRef) -> String {
+    format!(
+        "Data preview is not available for {} {}. Open SQL to work with it.",
         object.kind.label(),
         object.qualified_name()
     )

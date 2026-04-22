@@ -849,6 +849,16 @@ fn tree_row_index(workspace: &WorkspaceApp, label: &str) -> usize {
         .unwrap_or_else(|| panic!("tree row {label} should exist"))
 }
 
+fn tree_row_index_after(workspace: &WorkspaceApp, label: &str, start_index: usize) -> usize {
+    workspace
+        .tree_rows()
+        .iter()
+        .enumerate()
+        .skip(start_index + 1)
+        .find_map(|(index, row)| (row.label == label).then_some(index))
+        .unwrap_or_else(|| panic!("tree row {label} should exist after row {start_index}"))
+}
+
 #[test]
 fn workspace_bootstrap_builds_a_multi_connection_asset_tree() -> Result<()> {
     let bootstraps = vec![
@@ -963,7 +973,7 @@ fn workspace_bootstrap_loads_only_the_first_schema_and_expands_other_schemas_laz
     let analytics_index = tree_row_index(&workspace, "analytics");
     workspace.select_tree_row_index(analytics_index)?;
     workspace.open_selected_tree_item_default()?;
-    let views_index = tree_row_index(&workspace, "Views");
+    let views_index = tree_row_index_after(&workspace, "Views", analytics_index);
     workspace.select_tree_row_index(views_index)?;
     workspace.open_selected_tree_item_default()?;
     drain_until(
@@ -1088,6 +1098,160 @@ fn workspace_bootstrap_loads_only_the_first_object_group_and_expands_other_group
 }
 
 #[test]
+fn workspace_tree_shows_materialized_view_and_function_groups() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(LazyCatalogDriver::new(
+            summary_catalog(&[(
+                "public",
+                &[
+                    (DbObjectKind::Table, 1),
+                    (DbObjectKind::MaterializedView, 1),
+                    (DbObjectKind::Function, 2),
+                ],
+            )]),
+            &[("users", preview(&["id"], &[&["1"]]))],
+            &[(
+                ("postgres", "public"),
+                vec![
+                    DbObjectRef {
+                        database: "postgres".to_string(),
+                        schema: "public".to_string(),
+                        name: "users".to_string(),
+                        kind: DbObjectKind::Table,
+                    },
+                    DbObjectRef {
+                        database: "postgres".to_string(),
+                        schema: "public".to_string(),
+                        name: "daily_sales".to_string(),
+                        kind: DbObjectKind::MaterializedView,
+                    },
+                    DbObjectRef {
+                        database: "postgres".to_string(),
+                        schema: "public".to_string(),
+                        name: "refresh_sales".to_string(),
+                        kind: DbObjectKind::Function,
+                    },
+                    DbObjectRef {
+                        database: "postgres".to_string(),
+                        schema: "public".to_string(),
+                        name: "rebuild_metrics".to_string(),
+                        kind: DbObjectKind::Function,
+                    },
+                ],
+            )],
+            Arc::new(Mutex::new(Vec::new())),
+        )),
+    }];
+
+    let workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+
+    let labels = workspace
+        .tree_rows()
+        .iter()
+        .map(|row| row.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(labels.contains(&"Materialized Views"));
+    assert!(labels.contains(&"Functions"));
+    Ok(())
+}
+
+#[test]
+fn workspace_tree_keeps_empty_postgres_object_groups_and_queries_visible() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(LazyCatalogDriver::new(
+            summary_catalog(&[("public", &[(DbObjectKind::Table, 1)])]),
+            &[("users", preview(&["id"], &[&["1"]]))],
+            &[(
+                ("postgres", "public"),
+                vec![DbObjectRef {
+                    database: "postgres".to_string(),
+                    schema: "public".to_string(),
+                    name: "users".to_string(),
+                    kind: DbObjectKind::Table,
+                }],
+            )],
+            Arc::new(Mutex::new(Vec::new())),
+        )),
+    }];
+
+    let workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+
+    let labels = workspace
+        .tree_rows()
+        .iter()
+        .map(|row| row.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(labels.contains(&"Views"));
+    assert!(labels.contains(&"Materialized Views"));
+    assert!(labels.contains(&"Functions"));
+    assert!(labels.contains(&"Queries"));
+    Ok(())
+}
+
+#[test]
+fn opening_a_function_from_the_tree_goes_to_sql_editor() -> Result<()> {
+    let group_loads = Arc::new(Mutex::new(Vec::new()));
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(LazyCatalogDriver::new(
+            summary_catalog(&[(
+                "public",
+                &[(DbObjectKind::Table, 1), (DbObjectKind::Function, 1)],
+            )]),
+            &[("users", preview(&["id"], &[&["1"]]))],
+            &[(
+                ("postgres", "public"),
+                vec![
+                    DbObjectRef {
+                        database: "postgres".to_string(),
+                        schema: "public".to_string(),
+                        name: "users".to_string(),
+                        kind: DbObjectKind::Table,
+                    },
+                    DbObjectRef {
+                        database: "postgres".to_string(),
+                        schema: "public".to_string(),
+                        name: "refresh_sales".to_string(),
+                        kind: DbObjectKind::Function,
+                    },
+                ],
+            )],
+            group_loads,
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    let functions_index = tree_row_index(&workspace, "Functions");
+    workspace.select_tree_row_index(functions_index)?;
+    workspace.open_selected_tree_item_default()?;
+    drain_until(
+        &mut workspace,
+        |workspace| {
+            workspace
+                .tree_rows()
+                .iter()
+                .any(|row| row.label == "refresh_sales")
+        },
+        "the lazily loaded function group",
+    )?;
+    let function_index = tree_row_index(&workspace, "refresh_sales");
+    workspace.select_tree_row_index(function_index)?;
+    workspace.open_selected_tree_item_default()?;
+
+    assert_eq!(workspace.active_right_tab(), RightPaneTab::Sql);
+    assert_eq!(
+        workspace.editor_snapshot(),
+        Some(relora_app::workspace::SqlEditorSnapshot {
+            title: "SQL Editor (postgres.public.refresh_sales)".to_string(),
+            sql: "SELECT \"public\".\"refresh_sales\"(/* args */);".to_string(),
+        })
+    );
+    Ok(())
+}
+
+#[test]
 fn workspace_can_navigate_to_a_table_in_another_connection() -> Result<()> {
     let bootstraps = vec![
         ConnectionBootstrap {
@@ -1114,9 +1278,8 @@ fn workspace_can_navigate_to_a_table_in_another_connection() -> Result<()> {
     ];
 
     let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
-    for _ in 0..4 {
-        workspace.apply_action(WorkspaceAction::NextItem)?;
-    }
+    let events_index = tree_row_index(&workspace, "events");
+    workspace.select_tree_row_index(events_index)?;
     drain_until_idle(&mut workspace)?;
 
     assert_eq!(workspace.selected_row().label, "events");
@@ -1147,13 +1310,15 @@ fn workspace_tree_navigation_stops_at_the_last_row() -> Result<()> {
 
     let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
 
-    workspace.apply_action(WorkspaceAction::NextItem)?;
+    let last_index = workspace.tree_rows().len() - 1;
+    let last_label = workspace.tree_rows()[last_index].label.clone();
+    workspace.select_tree_row_index(last_index)?;
     drain_until_idle(&mut workspace)?;
-    assert_eq!(workspace.selected_row().label, "events");
+    assert_eq!(workspace.selected_row().label, last_label);
 
     workspace.apply_action(WorkspaceAction::NextItem)?;
 
-    assert_eq!(workspace.selected_row().label, "events");
+    assert_eq!(workspace.selected_row().label, last_label);
     Ok(())
 }
 
@@ -2066,8 +2231,10 @@ fn workspace_scopes_object_completions_to_the_active_database() -> Result<()> {
     let views_index = workspace
         .tree_rows()
         .iter()
-        .position(|row| row.label == "Views")
-        .expect("views row should exist");
+        .enumerate()
+        .skip(mart_index + 1)
+        .find_map(|(index, row)| (row.label == "Views").then_some(index))
+        .expect("views row should exist inside analytics");
     workspace.select_tree_row_index(views_index)?;
     workspace.open_selected_tree_item_default()?;
     drain_until(
@@ -2910,9 +3077,8 @@ fn workspace_loads_object_preview_in_background_and_applies_it_on_drain() -> Res
     ];
 
     let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
-    for _ in 0..4 {
-        workspace.apply_action(WorkspaceAction::NextItem)?;
-    }
+    let events_index = tree_row_index(&workspace, "events");
+    workspace.select_tree_row_index(events_index)?;
 
     assert_eq!(workspace.selected_row().label, "events");
     assert!(workspace.has_pending_tasks());
@@ -3022,9 +3188,8 @@ fn workspace_can_cancel_selected_connection_tasks_and_ignore_late_preview() -> R
     ];
 
     let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
-    for _ in 0..4 {
-        workspace.apply_action(WorkspaceAction::NextItem)?;
-    }
+    let events_index = tree_row_index(&workspace, "events");
+    workspace.select_tree_row_index(events_index)?;
 
     assert!(workspace.has_pending_tasks());
     workspace.apply_action(WorkspaceAction::CancelTasks)?;

@@ -905,8 +905,10 @@ fn summary_renders_selected_database_context_for_multi_database_connections() ->
     let views_index = app
         .tree_rows()
         .iter()
-        .position(|row| row.label == "Views")
-        .expect("views row should exist");
+        .enumerate()
+        .skip(mart_index + 1)
+        .find_map(|(index, row)| (row.label == "Views").then_some(index))
+        .expect("views row should exist inside analytics");
     app.select_tree_row_index(views_index)?;
     app.open_selected_tree_item_default()?;
     for _ in 0..8 {

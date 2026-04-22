@@ -99,7 +99,9 @@ impl DriverCapabilities {
 pub enum DbObjectKind {
     Table,
     View,
+    MaterializedView,
     ForeignTable,
+    Function,
 }
 
 impl DbObjectKind {
@@ -107,7 +109,9 @@ impl DbObjectKind {
         match self {
             Self::Table => "Table",
             Self::View => "View",
+            Self::MaterializedView => "Materialized View",
             Self::ForeignTable => "Foreign Table",
+            Self::Function => "Function",
         }
     }
 
@@ -115,7 +119,9 @@ impl DbObjectKind {
         match self {
             Self::Table => "Tables",
             Self::View => "Views",
+            Self::MaterializedView => "Materialized Views",
             Self::ForeignTable => "Foreign Tables",
+            Self::Function => "Functions",
         }
     }
 
@@ -123,7 +129,9 @@ impl DbObjectKind {
         match self {
             Self::Table => "table",
             Self::View => "view",
+            Self::MaterializedView => "materialized-view",
             Self::ForeignTable => "foreign-table",
+            Self::Function => "function",
         }
     }
 
@@ -131,14 +139,44 @@ impl DbObjectKind {
         match value {
             "table" | "tables" => Some(Self::Table),
             "view" | "views" => Some(Self::View),
+            "materialized-view" | "materialized_view" | "materialized view"
+            | "materialized-views" | "materialized_views" | "materialized views" => {
+                Some(Self::MaterializedView)
+            }
             "foreign-table" | "foreign_table" | "foreign table" | "foreign-tables"
             | "foreign_tables" | "foreign tables" => Some(Self::ForeignTable),
+            "function" | "functions" | "routine" | "routines" => Some(Self::Function),
             _ => None,
         }
     }
 
-    pub fn ordered() -> [Self; 3] {
-        [Self::Table, Self::View, Self::ForeignTable]
+    pub fn ordered() -> [Self; 5] {
+        [
+            Self::Table,
+            Self::View,
+            Self::MaterializedView,
+            Self::ForeignTable,
+            Self::Function,
+        ]
+    }
+
+    pub fn supports_data_preview(self) -> bool {
+        matches!(
+            self,
+            Self::Table | Self::View | Self::MaterializedView | Self::ForeignTable
+        )
+    }
+
+    pub fn supports_structure(self) -> bool {
+        true
+    }
+
+    pub fn supports_crud_templates(self) -> bool {
+        matches!(self, Self::Table | Self::ForeignTable)
+    }
+
+    pub fn supports_staged_crud(self) -> bool {
+        matches!(self, Self::Table | Self::ForeignTable)
     }
 }
 
@@ -460,4 +498,40 @@ pub trait DatabaseDriver: Send {
     fn load_object_columns(&mut self, table: &DbObjectRef) -> Result<Vec<DbColumn>>;
     fn execute_sql(&mut self, database: Option<&str>, sql: &str)
     -> Result<Vec<SqlExecutionResult>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DbObjectKind;
+
+    #[test]
+    fn object_kind_supports_materialized_views_and_functions_on_the_wire() {
+        assert_eq!(
+            DbObjectKind::from_wire_name("materialized-view"),
+            Some(DbObjectKind::MaterializedView)
+        );
+        assert_eq!(
+            DbObjectKind::from_wire_name("function"),
+            Some(DbObjectKind::Function)
+        );
+        assert_eq!(
+            DbObjectKind::MaterializedView.wire_name(),
+            "materialized-view"
+        );
+        assert_eq!(DbObjectKind::Function.wire_name(), "function");
+    }
+
+    #[test]
+    fn object_kind_order_includes_postgres_materialized_views_and_functions() {
+        assert_eq!(
+            DbObjectKind::ordered(),
+            [
+                DbObjectKind::Table,
+                DbObjectKind::View,
+                DbObjectKind::MaterializedView,
+                DbObjectKind::ForeignTable,
+                DbObjectKind::Function,
+            ]
+        );
+    }
 }

@@ -172,5 +172,7 @@ pub struct WorkspaceView<'a> {
     pub selected_connection_object_count: usize,
     pub selected_schema_table_count: usize,
     pub selected_schema_view_count: usize,
+    pub selected_schema_materialized_view_count: usize,
     pub selected_schema_foreign_table_count: usize,
+    pub selected_schema_function_count: usize,
 }

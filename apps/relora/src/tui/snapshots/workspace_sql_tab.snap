@@ -4,10 +4,10 @@
 │     [-] public [1]                     │└────────────────────────────────────────────────────────────────────────────────────────────────┘
 │       [-] Tables [1]                   │┌Selection───────────────────────────────────────────────────────────────────────────────────────┐
 │>>           release_runs [Table]       ││Connection: pg (PostgreSQL)                                                                     │
-│                                        ││Target: mock://postgres                                                                         │
-│                                        ││Database: postgres                                                                              │
-│                                        ││Databases: 1 | Schemas: 1 | Objects: 1                                                          │
-│                                        ││Dialect: double quotes | EXPLAIN + ANALYZE | RETURNING                                          │
+│       [+] Views [0]                    ││Target: mock://postgres                                                                         │
+│       [+] Materialized Views [0]       ││Database: postgres                                                                              │
+│       [+] Functions [0]                ││Databases: 1 | Schemas: 1 | Objects: 1                                                          │
+│       [+] Queries [0]                  ││Dialect: double quotes | EXPLAIN + ANALYZE | RETURNING                                          │
 │                                        ││Features: completion | templates | staged CRUD                                                  │
 │                                        ││Object: postgres.public.release_runs (Table)                                                    │
 │                                        │└────────────────────────────────────────────────────────────────────────────────────────────────┘

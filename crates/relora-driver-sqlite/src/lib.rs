@@ -427,7 +427,9 @@ fn sqlite_object_type(kind: DbObjectKind) -> Option<&'static str> {
     match kind {
         DbObjectKind::Table => Some("table"),
         DbObjectKind::View => Some("view"),
+        DbObjectKind::MaterializedView => None,
         DbObjectKind::ForeignTable => None,
+        DbObjectKind::Function => None,
     }
 }
 

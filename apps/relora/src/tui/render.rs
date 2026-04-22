@@ -768,9 +768,14 @@ pub(super) fn draw_header(
     };
 
     let activity_label = match view.active_right_tab {
-        RightPaneTab::Data => app
-            .preview_page_summary()
-            .unwrap_or_else(|| format!("rows {}", view.preview_grid.rows.len())),
+        RightPaneTab::Data => view
+            .selected_object
+            .filter(|object| !object.kind.supports_data_preview())
+            .map(|_| "preview unavailable".to_string())
+            .unwrap_or_else(|| {
+                app.preview_page_summary()
+                    .unwrap_or_else(|| format!("rows {}", view.preview_grid.rows.len()))
+            }),
         RightPaneTab::Sql => view
             .editor
             .map(|editor| {
@@ -921,8 +926,20 @@ pub(super) fn draw_data_tab(
     app: &WorkspaceApp,
     view: WorkspaceView<'_>,
 ) {
-    if view.selected_object.is_some() {
-        draw_preview(frame, area, app, view);
+    if let Some(object) = view.selected_object {
+        if object.kind.supports_data_preview() {
+            draw_preview(frame, area, app, view);
+        } else {
+            draw_structure_message(
+                frame,
+                area,
+                &format!("Data {}", object.qualified_name()),
+                &format!(
+                    "Preview is not available for {}s. Open the SQL tab to work with this object.",
+                    object.kind.label().to_ascii_lowercase()
+                ),
+            );
+        }
     } else {
         draw_placeholder(frame, area, view);
     }
@@ -1097,8 +1114,16 @@ pub(super) fn draw_placeholder(frame: &mut Frame<'_>, area: Rect, view: Workspac
         lines.push(format!("Tables: {}", view.selected_schema_table_count));
         lines.push(format!("Views: {}", view.selected_schema_view_count));
         lines.push(format!(
+            "Materialized views: {}",
+            view.selected_schema_materialized_view_count
+        ));
+        lines.push(format!(
             "Foreign tables: {}",
             view.selected_schema_foreign_table_count
+        ));
+        lines.push(format!(
+            "Functions: {}",
+            view.selected_schema_function_count
         ));
     }
 

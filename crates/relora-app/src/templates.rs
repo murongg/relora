@@ -5,6 +5,13 @@ pub fn select_template(
     object: &DbObjectRef,
     limit: usize,
 ) -> String {
+    if object.kind == relora_core::db::DbObjectKind::Function {
+        return format!(
+            "SELECT {};",
+            callable_name(capabilities.identifier_quote_style, object)
+        );
+    }
+
     format!(
         "SELECT *\nFROM {}\nLIMIT {};",
         qualified_name(capabilities.identifier_quote_style, object),
@@ -141,6 +148,39 @@ fn qualified_name(quote_style: IdentifierQuoteStyle, object: &DbObjectRef) -> St
     )
 }
 
+fn callable_name(quote_style: IdentifierQuoteStyle, object: &DbObjectRef) -> String {
+    let (function_name, signature) = split_function_signature(&object.name);
+    let args = if signature.is_some_and(str::is_empty) {
+        "()"
+    } else {
+        "(/* args */)"
+    };
+
+    format!(
+        "{}.{}{}",
+        quote_identifier(quote_style, &object.schema),
+        quote_identifier(quote_style, function_name),
+        args
+    )
+}
+
+fn split_function_signature(name: &str) -> (&str, Option<&str>) {
+    let Some(open_paren) = name.find('(') else {
+        return (name, None);
+    };
+    let Some(close_paren) = name.rfind(')') else {
+        return (name, None);
+    };
+    if close_paren < open_paren {
+        return (name, None);
+    }
+
+    (
+        &name[..open_paren],
+        Some(name[open_paren + 1..close_paren].trim()),
+    )
+}
+
 fn quote_identifier(quote_style: IdentifierQuoteStyle, value: &str) -> String {
     quote_style.quote_identifier(value)
 }
@@ -215,5 +255,20 @@ mod tests {
         assert!(!update_sql.contains("RETURNING *;"));
         assert!(delete_sql.contains("DELETE FROM `public`.`users`"));
         assert!(!delete_sql.contains("RETURNING *;"));
+    }
+
+    #[test]
+    fn function_select_template_uses_a_function_call_instead_of_from_clause() {
+        let capabilities = DriverCapabilities::for_kind(DatabaseKind::Postgres);
+        let object = DbObjectRef {
+            database: "app".to_string(),
+            schema: "public".to_string(),
+            name: "refresh_sales".to_string(),
+            kind: DbObjectKind::Function,
+        };
+
+        let sql = select_template(capabilities, &object, 100);
+
+        assert_eq!(sql, "SELECT \"public\".\"refresh_sales\"(/* args */);");
     }
 }

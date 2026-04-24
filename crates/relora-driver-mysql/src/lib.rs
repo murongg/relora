@@ -32,6 +32,21 @@ const COLUMN_SQL: &str = r#"
         c.data_type,
         c.is_nullable,
         CASE WHEN c.column_default IS NULL THEN 0 ELSE 1 END AS has_default,
+        CASE WHEN EXISTS (
+            SELECT 1
+            FROM information_schema.table_constraints tc_unique
+            JOIN information_schema.key_column_usage kcu_unique
+              ON kcu_unique.constraint_schema = tc_unique.constraint_schema
+             AND kcu_unique.constraint_name = tc_unique.constraint_name
+             AND kcu_unique.table_schema = tc_unique.table_schema
+             AND kcu_unique.table_name = tc_unique.table_name
+            WHERE tc_unique.table_schema = c.table_schema
+              AND tc_unique.table_name = c.table_name
+              AND tc_unique.constraint_type = 'UNIQUE'
+            GROUP BY tc_unique.constraint_name
+            HAVING COUNT(*) = 1
+               AND MAX(kcu_unique.column_name = c.column_name) = 1
+        ) THEN 1 ELSE 0 END AS is_unique,
         CASE WHEN kcu.column_name IS NULL THEN 0 ELSE 1 END AS is_primary_key
     FROM information_schema.columns c
     LEFT JOIN information_schema.table_constraints tc
@@ -287,7 +302,7 @@ impl DatabaseDriver for MySqlDriver {
     fn load_object_columns(&mut self, table: &DbObjectRef) -> Result<Vec<DbColumn>> {
         let mut connection = self.connection()?;
         let rows = connection
-            .exec::<(String, String, String, u8, u8), _, _>(
+            .exec::<(String, String, String, u8, u8, u8), _, _>(
                 COLUMN_SQL,
                 (&table.schema, &table.name),
             )
@@ -296,11 +311,12 @@ impl DatabaseDriver for MySqlDriver {
         Ok(rows
             .into_iter()
             .map(
-                |(name, data_type, is_nullable, has_default, is_primary_key)| DbColumn {
+                |(name, data_type, is_nullable, has_default, is_unique, is_primary_key)| DbColumn {
                     name,
                     data_type,
                     nullable: is_nullable == "YES",
                     has_default: has_default > 0,
+                    is_unique: is_unique > 0,
                     is_primary_key: is_primary_key > 0,
                 },
             )

@@ -1,4 +1,4 @@
- Relora  pg (PostgreSQL) | postgres.public.users |  Data  page 1 | rows 1-3 | limit 50 |  Ready                                             
+ Relora  pg (PostgreSQL) | postgres.public.users |  Structure  columns 3 |  Ready                                                           
 ┌* Assets────────────────────────────────┐┌Tabs────────────────────────────────────────────────────────────────────────────────────────────┐
 │   [-] pg [mock://postgres]             ││Data   SQL   Structure  F2/F3/F4 or Alt-1/2/3                                                   │
 │     [-] public [1]                     │└────────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -9,16 +9,16 @@
 │       [+] Functions [0]                ││Databases: 1 | Schemas: 1 | Objects: 1                                                          │
 │       [+] Queries [0]                  ││Dialect: double quotes | EXPLAIN + ANALYZE | RETURNING                                          │
 │                                        ││Features: completion | templates | staged CRUD                                                  │
-│                                        ││Object: postgres.public.users (Table)                                                           │
-│                                        │└────────────────────────────────────────────────────────────────────────────────────────────────┘
-│                                        │┌Preview Table public.users | page 1 | rows 1-3 | limit 50───────────────────────────────────────┐
-│                                        ││   id     email             status                                                              │
-│                                        ││>> 1      alice@example.com active                                                              │
-│                                        ││   2      bob@example.com   pending                                                             │
-│                                        ││   3      carol@example.com disabled                                                            │
-│                                        ││                                                                                                │
-│                                        ││                                                                                                │
-│                                        ││                                                                                                │
+│                 ┌Alter Column postgres.public.users | Tab next | Enter preview | Esc close─────────────────────────────┐                 │
+│                 │  table = users  editing email                                                                        │─────────────────┘
+│                 │› email  <boolean>  DEFAULT=<none>  NOT NULL                                                          │─────────────────┐
+│                 │                                                                                                      │                 │
+│                 │                                                                                                      │                 │
+│                 │                                                                                                      │                 │
+│                 │Usage─────────────────────────────────────────────────────────────────────────────────────────────────│                 │
+│                 │Field: column type  |  Left/Right or Space changes the type                                           │                 │
+│                 │Tab/Shift-Tab fields  Left/Right type  Space toggle NULL  Ctrl-U clear text  Enter SQL preview        │                 │
+│                 └──────────────────────────────────────────────────────────────────────────────────────────────────────┘                 │
 │                                        ││                                                                                                │
 │                                        ││                                                                                                │
 │                                        ││                                                                                                │
@@ -28,5 +28,5 @@
 │                                        ││                                                                                                │
 └────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌Status────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│Browsing Table public.users on mock://postgres (loaded 3 row(s), limit 50). | Data tab: / filter, n/p page, t new table, F3 SQL, F4       │
+│Browsing Table public.users on mock://postgres (loaded 1 row(s), limit 50). | Alter column: Tab/Shift-Tab fields, type name/default,      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

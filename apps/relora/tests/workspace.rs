@@ -13,9 +13,9 @@ use anyhow::Result;
 use relora_app::view::RightPaneTab;
 use relora_app::workspace::{ConnectionBootstrap, SavedSqlEntry, WorkspaceAction, WorkspaceApp};
 use relora_core::db::{
-    Catalog, CatalogSummary, DatabaseDriver, DatabaseEntry, DatabaseKind, DatabaseSummary,
-    DbColumn, DbObjectKind, DbObjectRef, ObjectKindCount, QueryResult, SchemaEntry, SchemaSummary,
-    SqlExecutionResult, TablePreview,
+    Catalog, CatalogSummary, CommandResult, DatabaseDriver, DatabaseEntry, DatabaseKind,
+    DatabaseSummary, DbColumn, DbObjectKind, DbObjectRef, ObjectKindCount, QueryResult,
+    SchemaEntry, SchemaSummary, SqlExecutionResult, TablePreview,
 };
 
 const BACKGROUND_WAIT_ATTEMPTS: usize = 200;
@@ -763,18 +763,43 @@ fn summary_catalog(schema_counts: &[(&str, &[(DbObjectKind, usize)])]) -> Catalo
     }
 }
 
-fn columns(values: &[(&str, &str, bool, bool, bool)]) -> Vec<DbColumn> {
+trait IntoTestColumn {
+    fn into_test_column(self) -> DbColumn;
+}
+
+impl IntoTestColumn for (&str, &str, bool, bool, bool) {
+    fn into_test_column(self) -> DbColumn {
+        let (name, data_type, nullable, has_default, is_primary_key) = self;
+        DbColumn {
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            nullable,
+            has_default,
+            is_unique: false,
+            is_primary_key,
+        }
+    }
+}
+
+impl IntoTestColumn for (&str, &str, bool, bool, bool, bool) {
+    fn into_test_column(self) -> DbColumn {
+        let (name, data_type, nullable, has_default, is_primary_key, is_unique) = self;
+        DbColumn {
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            nullable,
+            has_default,
+            is_unique,
+            is_primary_key,
+        }
+    }
+}
+
+fn columns<T: Copy + IntoTestColumn>(values: &[T]) -> Vec<DbColumn> {
     values
         .iter()
-        .map(
-            |(name, data_type, nullable, has_default, is_primary_key)| DbColumn {
-                name: (*name).to_string(),
-                data_type: (*data_type).to_string(),
-                nullable: *nullable,
-                has_default: *has_default,
-                is_primary_key: *is_primary_key,
-            },
-        )
+        .copied()
+        .map(IntoTestColumn::into_test_column)
         .collect()
 }
 
@@ -790,6 +815,13 @@ fn query(columns: &[&str], rows: &[&[&str]]) -> SqlExecutionResult {
 
 fn query_batch(items: Vec<SqlExecutionResult>) -> Vec<SqlExecutionResult> {
     items
+}
+
+fn command(tag: &str, rows_affected: u64) -> SqlExecutionResult {
+    SqlExecutionResult::Command(CommandResult {
+        tag: tag.to_string(),
+        rows_affected,
+    })
 }
 
 fn drain_until_idle(workspace: &mut WorkspaceApp) -> Result<()> {
@@ -2468,6 +2500,505 @@ fn workspace_loads_structure_columns_for_selected_table() -> Result<()> {
 }
 
 #[test]
+fn workspace_alter_column_form_previews_structure_edit_sql() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![columns(&[
+                ("id", "integer", false, false, true),
+                ("display_name", "text", true, false, false),
+            ])],
+            vec![],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut workspace, "users")?;
+    workspace.apply_action(WorkspaceAction::ScrollDataGridDown)?;
+    workspace.apply_action(WorkspaceAction::OpenAlterColumnForm)?;
+
+    let form = workspace
+        .alter_column_form_snapshot()
+        .expect("alter column form should open");
+    assert_eq!(form.old_name, "display_name");
+    assert_eq!(form.new_name, "display_name");
+    assert_eq!(form.type_label, "text");
+    assert!(form.nullable);
+
+    for _ in 0.."display_name".len() {
+        workspace.backspace_alter_column_form()?;
+    }
+    for ch in "name".chars() {
+        workspace.insert_alter_column_form_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::NextAlterColumnField)?;
+    workspace.apply_action(WorkspaceAction::CycleAlterColumnTypeNext)?;
+    workspace.apply_action(WorkspaceAction::NextAlterColumnField)?;
+    workspace.apply_action(WorkspaceAction::ToggleAlterColumnNullable)?;
+    workspace.apply_action(WorkspaceAction::PreviewAlterColumnForm)?;
+
+    let editor = workspace
+        .editor_snapshot()
+        .expect("preview should open the SQL editor");
+    assert!(editor.title.contains("Alter Column"));
+    assert!(
+        editor
+            .sql
+            .contains("RENAME COLUMN \"display_name\" TO \"name\";")
+    );
+    assert!(editor.sql.contains("ALTER COLUMN \"name\" TYPE boolean;"));
+    assert!(editor.sql.contains("ALTER COLUMN \"name\" SET NOT NULL;"));
+    Ok(())
+}
+
+#[test]
+fn workspace_alter_column_form_previews_default_change_sql() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![columns(&[("status", "text", false, false, false)])],
+            vec![],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut workspace, "users")?;
+    workspace.apply_action(WorkspaceAction::OpenAlterColumnForm)?;
+    workspace.apply_action(WorkspaceAction::NextAlterColumnField)?;
+    workspace.apply_action(WorkspaceAction::NextAlterColumnField)?;
+    for ch in "'draft'".chars() {
+        workspace.insert_alter_column_form_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::PreviewAlterColumnForm)?;
+
+    let editor = workspace
+        .editor_snapshot()
+        .expect("preview should open the SQL editor");
+    assert!(
+        editor
+            .sql
+            .contains("ALTER COLUMN \"status\" SET DEFAULT 'draft';")
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_add_column_form_previews_add_column_sql() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![columns(&[("id", "integer", false, false, true)])],
+            vec![],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut workspace, "users")?;
+    workspace.apply_action(WorkspaceAction::OpenAddColumnForm)?;
+    for ch in "status".chars() {
+        workspace.insert_add_column_form_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::NextAddColumnField)?;
+    workspace.apply_action(WorkspaceAction::CycleAddColumnTypeNext)?;
+    workspace.apply_action(WorkspaceAction::CycleAddColumnTypeNext)?;
+    workspace.apply_action(WorkspaceAction::CycleAddColumnTypeNext)?;
+    workspace.apply_action(WorkspaceAction::NextAddColumnField)?;
+    for ch in "'draft'".chars() {
+        workspace.insert_add_column_form_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::NextAddColumnField)?;
+    workspace.apply_action(WorkspaceAction::ToggleAddColumnNullable)?;
+    workspace.apply_action(WorkspaceAction::PreviewAddColumnForm)?;
+
+    let editor = workspace
+        .editor_snapshot()
+        .expect("preview should open the SQL editor");
+    assert!(editor.title.contains("Add Column"));
+    assert!(
+        editor
+            .sql
+            .contains("ADD COLUMN \"status\" boolean DEFAULT 'draft' NOT NULL;")
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_structure_editor_previews_batch_schema_changes() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![columns(&[
+                ("id", "integer", false, false, true),
+                ("display_name", "text", true, false, false),
+                ("status", "text", false, true, false),
+            ])],
+            vec![],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut workspace, "users")?;
+    workspace.apply_action(WorkspaceAction::ScrollDataGridDown)?;
+    workspace.apply_action(WorkspaceAction::OpenStructureEditor)?;
+
+    for _ in 0.."users".len() {
+        workspace.backspace_structure_editor_form()?;
+    }
+    for ch in "members".chars() {
+        workspace.insert_structure_editor_form_char(ch)?;
+    }
+
+    workspace.apply_action(WorkspaceAction::NextStructureEditorField)?;
+    for _ in 0.."display_name".len() {
+        workspace.backspace_structure_editor_form()?;
+    }
+    for ch in "name".chars() {
+        workspace.insert_structure_editor_form_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::MoveStructureEditorFieldRight)?;
+    workspace.apply_action(WorkspaceAction::MoveStructureEditorFieldRight)?;
+    workspace.apply_action(WorkspaceAction::MoveStructureEditorFieldRight)?;
+    workspace.apply_action(WorkspaceAction::ToggleStructureEditorNullable)?;
+    workspace.apply_action(WorkspaceAction::NextStructureEditorField)?;
+    workspace.apply_action(WorkspaceAction::NextStructureEditorField)?;
+    workspace.apply_action(WorkspaceAction::AddStructureEditorColumn)?;
+    for ch in "email".chars() {
+        workspace.insert_structure_editor_form_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::MoveStructureEditorFieldRight)?;
+    workspace.apply_action(WorkspaceAction::MoveStructureEditorFieldRight)?;
+    for ch in "'unknown'".chars() {
+        workspace.insert_structure_editor_form_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::MoveStructureEditorFieldRight)?;
+    workspace.apply_action(WorkspaceAction::ToggleStructureEditorNullable)?;
+    workspace.apply_action(WorkspaceAction::PreviousStructureEditorField)?;
+    workspace.apply_action(WorkspaceAction::RemoveStructureEditorColumn)?;
+    workspace.apply_action(WorkspaceAction::PreviewStructureEditorForm)?;
+
+    let editor = workspace
+        .editor_snapshot()
+        .expect("preview should open the SQL editor");
+    assert!(editor.title.contains("Edit Table"), "{}", editor.sql);
+    assert!(
+        editor.sql.contains("RENAME TO \"members\";"),
+        "{}",
+        editor.sql
+    );
+    assert!(
+        editor
+            .sql
+            .contains("RENAME COLUMN \"display_name\" TO \"name\";"),
+        "{}",
+        editor.sql
+    );
+    assert!(
+        editor.sql.contains("ALTER COLUMN \"name\" SET NOT NULL;"),
+        "{}",
+        editor.sql
+    );
+    assert!(
+        editor.sql.contains("DROP COLUMN \"status\";"),
+        "{}",
+        editor.sql
+    );
+    assert!(
+        editor
+            .sql
+            .contains("ADD COLUMN \"email\" text DEFAULT 'unknown' NOT NULL;"),
+        "{}",
+        editor.sql
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_structure_editor_can_apply_changes_directly_and_refresh_table() -> Result<()> {
+    let executed_sql = Arc::new(Mutex::new(Vec::new()));
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(
+            MockDriver::new(
+                vec![
+                    catalog("public", &[(DbObjectKind::Table, "users")]),
+                    catalog("public", &[(DbObjectKind::Table, "users")]),
+                ],
+                vec![
+                    preview(&["id", "email"], &[&["1", "alice@example.com"]]),
+                    preview(
+                        &["id", "email", "display_name"],
+                        &[&["1", "alice@example.com", "Alice"]],
+                    ),
+                ],
+                vec![
+                    columns(&[
+                        ("id", "integer", false, false, true),
+                        ("email", "text", true, false, false),
+                    ]),
+                    columns(&[
+                        ("id", "integer", false, false, true),
+                        ("email", "text", true, false, false),
+                        ("display_name", "text", true, false, false),
+                    ]),
+                ],
+                vec![query_batch(vec![command("ALTER TABLE", 0)])],
+            )
+            .with_sql_recorder(executed_sql.clone()),
+        ),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut workspace, "users")?;
+    workspace.apply_action(WorkspaceAction::OpenStructureEditor)?;
+    workspace.apply_action(WorkspaceAction::AddStructureEditorColumn)?;
+    for _ in 0.."new_column_3".len() {
+        workspace.backspace_structure_editor_form()?;
+    }
+    for ch in "display_name".chars() {
+        workspace.insert_structure_editor_form_char(ch)?;
+    }
+
+    workspace.preview_and_execute_structure_editor_form()?;
+    drain_until(
+        &mut workspace,
+        |workspace| {
+            workspace.view().structure.is_some_and(|structure| {
+                !structure.loading
+                    && structure.columns.len() == 3
+                    && structure.columns[2].name == "display_name"
+            }) && workspace.active_preview().columns == vec!["id", "email", "display_name"]
+        },
+        "structure editor direct apply refresh",
+    )?;
+    drain_until_idle(&mut workspace)?;
+
+    let sql = executed_sql
+        .lock()
+        .expect("sql recorder lock should be available")
+        .join("\n");
+    assert!(sql.contains("ADD COLUMN \"display_name\" text;"), "{sql}");
+    assert!(!workspace.structure_editor_form_open());
+    assert_eq!(workspace.selected_row().label, "users");
+    assert_eq!(workspace.active_preview().rows[0][2], "Alice");
+    Ok(())
+}
+
+#[test]
+fn workspace_structure_editor_previews_primary_key_and_unique_changes() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![columns(&[
+                ("id", "integer", false, false, true, false),
+                ("email", "text", true, false, false, false),
+                ("handle", "text", true, false, false, false),
+            ])],
+            vec![],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut workspace, "users")?;
+    workspace.apply_action(WorkspaceAction::OpenStructureEditor)?;
+
+    for _ in 0..5 {
+        workspace.apply_action(WorkspaceAction::MoveStructureEditorFieldRight)?;
+    }
+    workspace.apply_action(WorkspaceAction::ToggleStructureEditorPrimaryKey)?;
+    workspace.apply_action(WorkspaceAction::NextStructureEditorField)?;
+    workspace.apply_action(WorkspaceAction::ToggleStructureEditorPrimaryKey)?;
+    workspace.apply_action(WorkspaceAction::NextStructureEditorField)?;
+    workspace.apply_action(WorkspaceAction::MoveStructureEditorFieldLeft)?;
+    workspace.apply_action(WorkspaceAction::ToggleStructureEditorUnique)?;
+    workspace.apply_action(WorkspaceAction::PreviewStructureEditorForm)?;
+
+    let editor = workspace
+        .editor_snapshot()
+        .expect("preview should open the SQL editor");
+    assert!(
+        editor
+            .sql
+            .contains("DROP CONSTRAINT IF EXISTS \"users_pkey\";"),
+        "{}",
+        editor.sql
+    );
+    assert!(
+        editor.sql.contains("ALTER COLUMN \"email\" SET NOT NULL;"),
+        "{}",
+        editor.sql
+    );
+    assert!(
+        editor
+            .sql
+            .contains("ADD CONSTRAINT \"users_handle_key\" UNIQUE (\"handle\");"),
+        "{}",
+        editor.sql
+    );
+    assert!(
+        editor
+            .sql
+            .contains("ADD CONSTRAINT \"users_pkey\" PRIMARY KEY (\"email\");"),
+        "{}",
+        editor.sql
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_drop_column_confirmation_previews_drop_sql() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![columns(&[
+                ("id", "integer", false, false, true),
+                ("status", "text", false, false, false),
+            ])],
+            vec![],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut workspace, "users")?;
+    workspace.apply_action(WorkspaceAction::ScrollDataGridDown)?;
+    workspace.apply_action(WorkspaceAction::PromptDropStructureColumn)?;
+    workspace.apply_action(WorkspaceAction::ConfirmDeleteOperation)?;
+
+    let editor = workspace
+        .editor_snapshot()
+        .expect("drop preview should open the SQL editor");
+    assert!(editor.title.contains("Drop Column"));
+    assert!(
+        editor
+            .sql
+            .contains("ALTER TABLE \"public\".\"users\"\n    DROP COLUMN \"status\";")
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_rename_table_form_previews_rename_sql() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![columns(&[("id", "integer", false, false, true)])],
+            vec![],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut workspace, "users")?;
+    workspace.apply_action(WorkspaceAction::OpenRenameTableForm)?;
+    for ch in "members".chars() {
+        workspace.insert_rename_table_form_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::PreviewRenameTableForm)?;
+
+    let editor = workspace
+        .editor_snapshot()
+        .expect("rename preview should open the SQL editor");
+    assert!(editor.title.contains("Rename Table"));
+    assert!(
+        editor
+            .sql
+            .contains("ALTER TABLE \"public\".\"users\"\n    RENAME TO \"members\";")
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_create_index_form_previews_sql() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![columns(&[
+                ("id", "integer", false, false, true),
+                ("status", "text", false, false, false),
+            ])],
+            vec![],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut workspace, "users")?;
+    workspace.apply_action(WorkspaceAction::ScrollDataGridDown)?;
+    workspace.apply_action(WorkspaceAction::OpenCreateIndexForm)?;
+    workspace.clear_create_index_form()?;
+    for ch in "users_status_idx".chars() {
+        workspace.insert_create_index_form_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::ToggleCreateIndexUnique)?;
+    workspace.apply_action(WorkspaceAction::PreviewCreateIndexForm)?;
+
+    let editor = workspace
+        .editor_snapshot()
+        .expect("create index preview should open the SQL editor");
+    assert!(editor.title.contains("Create Index"));
+    assert!(editor.sql.contains(
+        "CREATE UNIQUE INDEX \"users_status_idx\"\n    ON \"public\".\"users\" (\"status\");"
+    ));
+    Ok(())
+}
+
+#[test]
+fn workspace_drop_index_form_previews_sql() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![columns(&[
+                ("id", "integer", false, false, true),
+                ("status", "text", false, false, false),
+            ])],
+            vec![],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut workspace, "users")?;
+    workspace.apply_action(WorkspaceAction::ScrollDataGridDown)?;
+    workspace.apply_action(WorkspaceAction::OpenDropIndexForm)?;
+    workspace.apply_action(WorkspaceAction::PreviewDropIndexForm)?;
+
+    let editor = workspace
+        .editor_snapshot()
+        .expect("drop index preview should open the SQL editor");
+    assert!(editor.title.contains("Drop Index"));
+    assert!(
+        editor
+            .sql
+            .contains("DROP INDEX \"public\".\"users_status_idx\";")
+    );
+    Ok(())
+}
+
+#[test]
 fn workspace_scrolls_structure_columns_without_moving_asset_selection() -> Result<()> {
     let bootstraps = vec![ConnectionBootstrap {
         name: "pg".to_string(),
@@ -2958,6 +3489,202 @@ fn workspace_insert_row_form_auto_loads_column_types_for_typed_inputs() -> Resul
         typed_form.date_picker.is_none(),
         "date picker should stay tied to the selected field"
     );
+    Ok(())
+}
+
+#[test]
+fn workspace_create_table_form_cycles_type_and_previews_create_sql() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![],
+            vec![],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::OpenCreateTableForm)?;
+
+    for ch in "audit_log".chars() {
+        workspace.insert_create_table_form_char(ch)?;
+    }
+
+    workspace.apply_action(WorkspaceAction::NextCreateTableField)?;
+    workspace.apply_action(WorkspaceAction::MoveCreateTableFieldRight)?;
+    workspace.apply_action(WorkspaceAction::CycleCreateTableColumnTypeNext)?;
+
+    let form = workspace
+        .create_table_form_snapshot()
+        .expect("create table form should be visible");
+    assert_eq!(form.table_name, "audit_log");
+    assert_eq!(form.columns.len(), 1);
+    assert_eq!(form.columns[0].type_label, "bigint");
+
+    workspace.apply_action(WorkspaceAction::PreviewCreateTableForm)?;
+
+    let editor = workspace
+        .editor_snapshot()
+        .expect("previewing a table should open the SQL editor");
+    assert!(editor.title.contains("Create Table"));
+    assert!(editor.sql.contains("CREATE TABLE \"public\".\"audit_log\""));
+    assert!(editor.sql.contains("\"id\" bigint NOT NULL PRIMARY KEY"));
+    assert!(
+        workspace
+            .editor_status()
+            .is_some_and(|status| status.contains("Ctrl-Enter")),
+        "preview should explain how to execute the generated SQL"
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_create_table_form_supports_default_and_unique_columns() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![],
+            vec![],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::OpenCreateTableForm)?;
+    for ch in "release_runs".chars() {
+        workspace.insert_create_table_form_char(ch)?;
+    }
+
+    workspace.apply_action(WorkspaceAction::AddCreateTableColumn)?;
+    for _ in 0..8 {
+        workspace.backspace_create_table_form()?;
+    }
+    for ch in "state".chars() {
+        workspace.insert_create_table_form_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::MoveCreateTableFieldRight)?;
+    workspace.apply_action(WorkspaceAction::MoveCreateTableFieldRight)?;
+    for ch in "'pending'".chars() {
+        workspace.insert_create_table_form_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::MoveCreateTableFieldRight)?;
+    workspace.apply_action(WorkspaceAction::ToggleCreateTableColumnNullable)?;
+    workspace.apply_action(WorkspaceAction::MoveCreateTableFieldRight)?;
+    workspace.apply_action(WorkspaceAction::ToggleCreateTableColumnUnique)?;
+
+    let form = workspace
+        .create_table_form_snapshot()
+        .expect("create table form should still be visible");
+    let state = form
+        .columns
+        .iter()
+        .find(|column| column.name == "state")
+        .expect("new state column should exist");
+    assert_eq!(state.type_label, "text");
+    assert_eq!(state.default_value.as_deref(), Some("'pending'"));
+    assert!(!state.nullable);
+    assert!(state.unique);
+
+    workspace.apply_action(WorkspaceAction::PreviewCreateTableForm)?;
+
+    let editor = workspace
+        .editor_snapshot()
+        .expect("preview should open the SQL editor");
+    assert!(
+        editor
+            .sql
+            .contains("\"state\" text DEFAULT 'pending' NOT NULL UNIQUE")
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_create_table_form_auto_increment_previews_serial_sql() -> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![],
+            vec![],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    workspace.apply_action(WorkspaceAction::OpenCreateTableForm)?;
+    for ch in "events".chars() {
+        workspace.insert_create_table_form_char(ch)?;
+    }
+
+    workspace.apply_action(WorkspaceAction::NextCreateTableField)?;
+    for _ in 0..5 {
+        workspace.apply_action(WorkspaceAction::MoveCreateTableFieldRight)?;
+    }
+    workspace.apply_action(WorkspaceAction::ToggleCreateTableColumnAutoIncrement)?;
+
+    let form = workspace
+        .create_table_form_snapshot()
+        .expect("create table form should still be visible");
+    let id = &form.columns[0];
+    assert!(id.auto_increment);
+    assert!(id.primary_key);
+    assert!(!id.nullable);
+    assert_eq!(id.type_label, "integer");
+
+    workspace.apply_action(WorkspaceAction::PreviewCreateTableForm)?;
+
+    let editor = workspace
+        .editor_snapshot()
+        .expect("preview should open the SQL editor");
+    assert!(editor.sql.contains("\"id\" serial NOT NULL PRIMARY KEY"));
+    Ok(())
+}
+
+#[test]
+fn workspace_create_table_execution_refreshes_empty_tables_group_and_selects_new_table()
+-> Result<()> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![
+                catalog("public", &[]),
+                catalog("public", &[(DbObjectKind::Table, "events")]),
+            ],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![],
+            vec![query_batch(vec![command("CREATE TABLE", 0)])],
+        )),
+    }];
+
+    let mut workspace = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    let schema_index = tree_row_index(&workspace, "public");
+    workspace.select_tree_row_index(schema_index)?;
+    workspace.apply_action(WorkspaceAction::OpenCreateTableForm)?;
+    for ch in "events".chars() {
+        workspace.insert_create_table_form_char(ch)?;
+    }
+    workspace.apply_action(WorkspaceAction::PreviewCreateTableForm)?;
+    workspace.apply_action(WorkspaceAction::ExecuteEditor)?;
+
+    drain_until(
+        &mut workspace,
+        |workspace| {
+            workspace.selected_row().label == "events"
+                && workspace
+                    .tree_rows()
+                    .iter()
+                    .any(|row| row.label == "events")
+                && workspace.active_preview().rows == vec![vec!["1".to_string()]]
+        },
+        "newly created table to appear and load preview after DDL refresh",
+    )?;
+    drain_until_idle(&mut workspace)?;
+
+    assert_eq!(workspace.selected_row().label, "events");
+    assert_eq!(workspace.active_preview().columns, vec!["id"]);
+    assert_eq!(workspace.active_preview().rows[0][0], "1");
     Ok(())
 }
 

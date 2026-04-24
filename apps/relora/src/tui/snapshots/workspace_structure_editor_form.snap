@@ -1,0 +1,32 @@
+ Relora  pg (PostgreSQL) | postgres.public.users |  Structure  columns 3 |  Ready                                                           
+┌* Assets────────────────────────────────┐┌Tabs────────────────────────────────────────────────────────────────────────────────────────────┐
+│   [-] pg [mock://postgres]             ││Data   SQL   Structure  F2/F3/F4 or Alt-1/2/3                                                   │
+│     [-] public [1]                     │└────────────────────────────────────────────────────────────────────────────────────────────────┘
+│       [-] Tables [1]                   │┌Selection───────────────────────────────────────────────────────────────────────────────────────┐
+│>>           users [Table]              ││Connection: pg (PostgreSQL)                                                                     │
+│       [+] Views ┌Edit Table postgres.public | Tab next | Enter preview | Ctrl-Enter apply | Esc close──────────────────┐                 │
+│       [+] Materi│  table = members  was users                                                                          │                 │
+│       [+] Functi│  id  <integer>  DEFAULT=<none>  NOT NULL  no UNIQUE  PK  existing                                    │                 │
+│       [+] Querie│› display_name  <text>  DEFAULT=<none>  NULL  no UNIQUE  no PK  existing                              │                 │
+│                 │  status  <text>  DEFAULT=<existing default>  NOT NULL  no UNIQUE  no PK  existing                    │                 │
+│                 │                                                                                                      │                 │
+│                 │                                                                                                      │─────────────────┘
+│                 │                                                                                                      │─────────────────┐
+│                 │                                                                                                      │                 │
+│                 │                                                                                                      │                 │
+│                 │                                                                                                      │                 │
+│                 │                                                                                                      │                 │
+│                 │                                                                                                      │                 │
+│                 │                                                                                                      │                 │
+│                 │                                                                                                      │                 │
+│                 │                                                                                                      │                 │
+│                 │Usage─────────────────────────────────────────────────────────────────────────────────────────────────│                 │
+│                 │Field: column type  |  Left/Right or Space changes the type                                           │                 │
+│                 │Up/Down rows  Tab fields  Left/Right type  Space toggle NULL/UNIQUE/PK  + add column  D remove column │                 │
+│                 └──────────────────────────────────────────────────────────────────────────────────────────────────────┘                 │
+│                                        ││                                                                                                │
+│                                        ││                                                                                                │
+└────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌Status────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Browsing Table public.users on mock://postgres (loaded 1 row(s), limit 50). | Edit table: Up/Down or j/k rows, Tab/Shift-Tab fields,      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

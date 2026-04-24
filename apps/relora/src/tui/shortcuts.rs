@@ -39,6 +39,7 @@ pub(super) const KEY_BROWSER_FILTER: char = '/';
 pub(super) const KEY_BROWSER_REFRESH: char = 'r';
 pub(super) const KEY_BROWSER_CANCEL_TASKS: char = 'c';
 pub(super) const KEY_BROWSER_OPEN_SQL: char = 'e';
+pub(super) const KEY_BROWSER_CREATE_TABLE: char = 't';
 pub(super) const KEY_BROWSER_TEMPLATE_SELECT: char = 's';
 pub(super) const KEY_BROWSER_TEMPLATE_INSERT: char = 'i';
 pub(super) const KEY_BROWSER_TEMPLATE_UPDATE: char = 'u';
@@ -58,6 +59,12 @@ pub(super) const KEY_ROW_INSPECTOR_COPY: char = 'y';
 pub(super) const KEY_ROW_INSPECTOR_COPY_UPPER: char = 'Y';
 pub(super) const KEY_ROW_INSPECTOR_EDIT: char = 'i';
 pub(super) const KEY_ROW_INSPECTOR_FORMAT: char = 'f';
+pub(super) const KEY_STRUCTURE_EDIT_COLUMN: char = 'e';
+pub(super) const KEY_STRUCTURE_ADD_COLUMN: char = 'a';
+pub(super) const KEY_STRUCTURE_RENAME_TABLE: char = 'R';
+pub(super) const KEY_STRUCTURE_DROP_COLUMN: char = 'D';
+pub(super) const KEY_STRUCTURE_CREATE_INDEX: char = 'x';
+pub(super) const KEY_STRUCTURE_DROP_INDEX: char = 'X';
 
 pub(super) const KEY_EDITOR_NEW_TAB: char = 't';
 pub(super) const KEY_EDITOR_CLOSE_TAB: char = 'w';
@@ -65,6 +72,10 @@ pub(super) const KEY_EDITOR_CANCEL_TASKS: char = 'k';
 pub(super) const KEY_EDITOR_COMMIT_STAGED: char = 'g';
 pub(super) const KEY_EDITOR_SAVE_SQL: char = 's';
 pub(super) const KEY_EDITOR_DELETE_SAVED_SQL: char = 'd';
+
+pub(super) const KEY_CREATE_TABLE_ADD_COLUMN: char = '+';
+pub(super) const KEY_CREATE_TABLE_REMOVE_COLUMN: char = 'D';
+pub(super) const KEY_CREATE_TABLE_TOGGLE: char = ' ';
 
 pub(super) const KEY_ALT_TAB_DATA: char = '1';
 pub(super) const KEY_ALT_TAB_SQL: char = '2';
@@ -109,6 +120,16 @@ pub(super) const FOOTER_SAVED_SQL_HELP: &str =
 pub(super) const FOOTER_DATA_FILTER_HELP: &str =
     "Data filter: type quick filter, Enter apply, Esc close";
 pub(super) const FOOTER_SAVE_SQL_HELP: &str = "Save SQL: type a name, Enter save, Esc close";
+pub(super) const FOOTER_CREATE_TABLE_FORM_HELP: &str = "Create table: Up/Down or j/k rows, Tab/Shift-Tab fields, Left/Right or Space selects type, Space toggles NULL/UNIQUE/AUTO/PK, + add column, D remove column, Enter preview, Ctrl-Enter create";
+pub(super) const FOOTER_STRUCTURE_EDITOR_FORM_HELP: &str = "Edit table: Up/Down or j/k rows, Tab/Shift-Tab fields, Left/Right or Space selects type, Space toggles NULL/UNIQUE/PK, + add column, D remove column, Enter preview";
+pub(super) const FOOTER_ALTER_COLUMN_FORM_HELP: &str = "Alter column: Tab/Shift-Tab fields, type name/default, Left/Right or Space selects type, Space toggles NULL, Enter SQL preview";
+pub(super) const FOOTER_ADD_COLUMN_FORM_HELP: &str = "Add column: Tab/Shift-Tab fields, type name/default, Left/Right or Space selects type, Space toggles NULL, Enter SQL preview";
+pub(super) const FOOTER_RENAME_TABLE_FORM_HELP: &str =
+    "Rename table: type the new name, Ctrl-U clear, Enter SQL preview, Esc close";
+pub(super) const FOOTER_CREATE_INDEX_FORM_HELP: &str =
+    "Create index: type name, Space toggles UNIQUE, Ctrl-U clear, Enter SQL preview";
+pub(super) const FOOTER_DROP_INDEX_FORM_HELP: &str =
+    "Drop index: type name, Ctrl-U clear, Enter SQL preview, Esc close";
 pub(super) const FOOTER_INSERT_ROW_FORM_HELP: &str = "Insert row: Tab/j/k switch field, type value, date arrows/PgUp/Home adjust, datetime Left/Right segment Up/Down adjust, Ctrl-U clear, Enter preview SQL";
 pub(super) const FOOTER_CELL_EDIT_HELP: &str =
     "Cell edit: type new value, Enter preview staged SQL, Esc close";
@@ -117,19 +138,16 @@ pub(super) const FOOTER_COMPLETION_HELP: &str =
     "Completion: Enter/Tab accept, Up/Down select, Esc close";
 pub(super) const FOOTER_SQL_RESULTS_HELP: &str =
     "SQL results: j/k rows, h/l columns, [/] resize, = auto, f freeze, F clear, Tab cycle";
-pub(super) const FOOTER_SQL_ASSETS_HELP: &str =
-    "SQL assets: j/k browse, Enter open/toggle, Tab/Shift-Tab cycle, F2 Data, F4 Structure";
+pub(super) const FOOTER_SQL_ASSETS_HELP: &str = "SQL assets: j/k browse, Enter open/toggle, t new table, Tab/Shift-Tab cycle, F2 Data, F4 Structure";
 pub(super) const FOOTER_SQL_EDITOR_HELP: &str = "SQL editor: Tab/Shift-Tab cycle, Ctrl-Enter run, Ctrl-S save, Ctrl-D delete saved, Ctrl-O saved";
 pub(super) const FOOTER_SQL_TAB_HELP: &str =
     "SQL tab: e open editor, Ctrl-O saved, Ctrl-D delete saved, F10 history, F2 Data, F4 Structure";
-pub(super) const FOOTER_STRUCTURE_GRID_HELP: &str =
-    "Structure tab: j/k fields, [/] resize, = auto, f freeze, F clear, Enter inspect";
+pub(super) const FOOTER_STRUCTURE_GRID_HELP: &str = "Structure tab: j/k fields, e edit table, a add, D drop col, R rename table, x add idx, X drop idx, [/] resize";
 pub(super) const FOOTER_STRUCTURE_HELP: &str =
     "Structure tab: Tab fields, F2 Data, F3 SQL, r refresh, Ctrl-P command";
 pub(super) const FOOTER_DATA_GRID_HELP: &str =
     "Data tab: / filter, a insert, D delete, i stage edit, y row, Y cell, w WHERE, n/p page";
-pub(super) const FOOTER_DATA_HELP: &str =
-    "Data tab: / filter, n/p page, F3 SQL, F4 Structure, j/k assets, Tab grid, e SQL, Ctrl-O/F10";
+pub(super) const FOOTER_DATA_HELP: &str = "Data tab: / filter, n/p page, t new table, F3 SQL, F4 Structure, j/k assets, Tab grid, e SQL, Ctrl-O/F10";
 
 pub(super) const HELP_GLOBAL_SHORTCUTS: [(&str, &str); 5] = [
     ("F1 / ?", "Open or close help"),
@@ -139,10 +157,11 @@ pub(super) const HELP_GLOBAL_SHORTCUTS: [(&str, &str); 5] = [
     ("F4 / Alt-3", "Focus Structure tab"),
 ];
 
-pub(super) const HELP_DATA_SHORTCUTS: [(&str, &str); 5] = [
+pub(super) const HELP_DATA_SHORTCUTS: [(&str, &str); 6] = [
     ("Tab", "Cycle assets, grid, and editor"),
     ("/", "Open data filter"),
     ("n / p", "Load next or previous page"),
+    ("t", "Open the new table form on the selected schema"),
     ("y / Y / w", "Copy row, cell, or WHERE"),
     (
         "a / D / i",
@@ -161,11 +180,21 @@ pub(super) const HELP_SQL_SHORTCUTS: [(&str, &str); 8] = [
     ("Tab", "Cycle editor, results, and assets"),
 ];
 
-pub(super) const HELP_STRUCTURE_SHORTCUTS: [(&str, &str); 4] = [
+pub(super) const HELP_STRUCTURE_SHORTCUTS: [(&str, &str); 8] = [
     ("F4 / Alt-3", "Switch to structure tab"),
     ("Tab", "Focus structure grid"),
+    (
+        "e / a",
+        "Edit the current table schema or open quick add column",
+    ),
+    (
+        "D / R",
+        "Preview drop column SQL or rename the current table",
+    ),
+    ("x / X", "Preview create index SQL or drop index SQL"),
     ("Enter", "Inspect selected field or row"),
     ("[ / ] / =", "Resize or reset column width"),
+    ("f / F", "Freeze columns or clear frozen columns"),
 ];
 
 pub(super) const HELP_DRIVER_SUPPORT_ROWS: [(&str, &str); 3] = [

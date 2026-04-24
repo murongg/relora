@@ -1,4 +1,50 @@
-use relora_core::db::{DbColumn, DbObjectRef, DriverCapabilities, IdentifierQuoteStyle};
+use relora_core::db::{
+    DatabaseKind, DbColumn, DbObjectRef, DriverCapabilities, IdentifierQuoteStyle,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreateTableColumnTemplate<'a> {
+    pub name: &'a str,
+    pub data_type: &'a str,
+    pub default_value: Option<&'a str>,
+    pub nullable: bool,
+    pub unique: bool,
+    pub auto_increment: bool,
+    pub primary_key: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlterColumnTemplate<'a> {
+    pub old_name: &'a str,
+    pub new_name: &'a str,
+    pub old_data_type: &'a str,
+    pub new_data_type: &'a str,
+    pub old_nullable: bool,
+    pub new_nullable: bool,
+    pub old_default: Option<&'a str>,
+    pub new_default: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AddColumnTemplate<'a> {
+    pub name: &'a str,
+    pub data_type: &'a str,
+    pub nullable: bool,
+    pub default_value: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenameTableTemplate<'a> {
+    pub old_name: &'a str,
+    pub new_name: &'a str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreateIndexTemplate<'a> {
+    pub index_name: &'a str,
+    pub column_name: &'a str,
+    pub unique: bool,
+}
 
 pub fn select_template(
     capabilities: DriverCapabilities,
@@ -104,6 +150,460 @@ pub fn delete_template(
     sql
 }
 
+pub fn create_table_template(
+    kind: DatabaseKind,
+    quote_style: IdentifierQuoteStyle,
+    schema: &str,
+    table_name: &str,
+    columns: &[CreateTableColumnTemplate<'_>],
+) -> String {
+    let column_list = columns
+        .iter()
+        .map(|column| {
+            if kind == DatabaseKind::Sqlite && column.auto_increment {
+                return format!(
+                    "    {} INTEGER PRIMARY KEY AUTOINCREMENT",
+                    quote_identifier(quote_style, column.name)
+                );
+            }
+
+            let mut line = format!(
+                "    {} {}",
+                quote_identifier(quote_style, column.name),
+                create_table_column_type(kind, column)
+            );
+            if let Some(default_value) = column
+                .default_value
+                .filter(|value| !value.trim().is_empty())
+            {
+                line.push_str(" DEFAULT ");
+                line.push_str(default_value.trim());
+            }
+            if !column.nullable {
+                line.push_str(" NOT NULL");
+            }
+            if column.unique {
+                line.push_str(" UNIQUE");
+            }
+            if kind == DatabaseKind::MySql && column.auto_increment {
+                line.push_str(" AUTO_INCREMENT");
+            }
+            if column.primary_key {
+                line.push_str(" PRIMARY KEY");
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+
+    format!(
+        "CREATE TABLE {}.{} (\n{}\n);",
+        quote_identifier(quote_style, schema),
+        quote_identifier(quote_style, table_name),
+        column_list
+    )
+}
+
+pub fn alter_column_template(
+    kind: DatabaseKind,
+    quote_style: IdentifierQuoteStyle,
+    schema: &str,
+    table_name: &str,
+    column: AlterColumnTemplate<'_>,
+) -> String {
+    match kind {
+        DatabaseKind::Postgres => {
+            alter_column_template_postgres(quote_style, schema, table_name, column)
+        }
+        DatabaseKind::MySql => alter_column_template_mysql(quote_style, schema, table_name, column),
+        DatabaseKind::Sqlite => {
+            alter_column_template_sqlite(quote_style, schema, table_name, column)
+        }
+    }
+}
+
+pub fn add_column_template(
+    kind: DatabaseKind,
+    quote_style: IdentifierQuoteStyle,
+    schema: &str,
+    table_name: &str,
+    column: AddColumnTemplate<'_>,
+) -> String {
+    match kind {
+        DatabaseKind::Postgres | DatabaseKind::MySql | DatabaseKind::Sqlite => {
+            let mut sql = format!(
+                "ALTER TABLE {}.{}\n    ADD COLUMN {} {}",
+                quote_identifier(quote_style, schema),
+                quote_identifier(quote_style, table_name),
+                quote_identifier(quote_style, column.name),
+                column.data_type.trim()
+            );
+            if let Some(default_value) = column
+                .default_value
+                .filter(|value| !value.trim().is_empty())
+            {
+                sql.push_str(" DEFAULT ");
+                sql.push_str(default_value.trim());
+            }
+            if !column.nullable {
+                sql.push_str(" NOT NULL");
+            }
+            sql.push(';');
+            sql
+        }
+    }
+}
+
+pub fn rename_table_template(
+    kind: DatabaseKind,
+    quote_style: IdentifierQuoteStyle,
+    schema: &str,
+    table: RenameTableTemplate<'_>,
+) -> String {
+    match kind {
+        DatabaseKind::MySql => format!(
+            "RENAME TABLE {}.{} TO {}.{};",
+            quote_identifier(quote_style, schema),
+            quote_identifier(quote_style, table.old_name),
+            quote_identifier(quote_style, schema),
+            quote_identifier(quote_style, table.new_name)
+        ),
+        DatabaseKind::Postgres | DatabaseKind::Sqlite => format!(
+            "ALTER TABLE {}.{}\n    RENAME TO {};",
+            quote_identifier(quote_style, schema),
+            quote_identifier(quote_style, table.old_name),
+            quote_identifier(quote_style, table.new_name)
+        ),
+    }
+}
+
+pub fn drop_column_template(
+    kind: DatabaseKind,
+    quote_style: IdentifierQuoteStyle,
+    schema: &str,
+    table_name: &str,
+    column_name: &str,
+) -> String {
+    match kind {
+        DatabaseKind::Postgres | DatabaseKind::MySql => format!(
+            "ALTER TABLE {}.{}\n    DROP COLUMN {};",
+            quote_identifier(quote_style, schema),
+            quote_identifier(quote_style, table_name),
+            quote_identifier(quote_style, column_name)
+        ),
+        DatabaseKind::Sqlite => format!(
+            "-- SQLite cannot directly drop columns in every supported environment.\n-- Rebuild the table manually to remove {} from {}.{}.",
+            quote_identifier(quote_style, column_name),
+            quote_identifier(quote_style, schema),
+            quote_identifier(quote_style, table_name)
+        ),
+    }
+}
+
+pub fn create_index_template(
+    kind: DatabaseKind,
+    quote_style: IdentifierQuoteStyle,
+    schema: &str,
+    table_name: &str,
+    index: CreateIndexTemplate<'_>,
+) -> String {
+    let unique = if index.unique { "UNIQUE " } else { "" };
+    match kind {
+        DatabaseKind::Postgres | DatabaseKind::MySql | DatabaseKind::Sqlite => format!(
+            "CREATE {unique}INDEX {}\n    ON {}.{} ({});",
+            quote_identifier(quote_style, index.index_name),
+            quote_identifier(quote_style, schema),
+            quote_identifier(quote_style, table_name),
+            quote_identifier(quote_style, index.column_name)
+        ),
+    }
+}
+
+pub fn drop_index_template(
+    kind: DatabaseKind,
+    quote_style: IdentifierQuoteStyle,
+    schema: &str,
+    table_name: &str,
+    index_name: &str,
+) -> String {
+    match kind {
+        DatabaseKind::MySql => format!(
+            "DROP INDEX {}\n    ON {}.{};",
+            quote_identifier(quote_style, index_name),
+            quote_identifier(quote_style, schema),
+            quote_identifier(quote_style, table_name)
+        ),
+        DatabaseKind::Postgres | DatabaseKind::Sqlite => format!(
+            "DROP INDEX {}.{};",
+            quote_identifier(quote_style, schema),
+            quote_identifier(quote_style, index_name)
+        ),
+    }
+}
+
+pub fn add_primary_key_template(
+    kind: DatabaseKind,
+    quote_style: IdentifierQuoteStyle,
+    schema: &str,
+    table_name: &str,
+    column_name: &str,
+) -> String {
+    match kind {
+        DatabaseKind::Postgres => format!(
+            "ALTER TABLE {}.{}\n    ADD CONSTRAINT {} PRIMARY KEY ({});",
+            quote_identifier(quote_style, schema),
+            quote_identifier(quote_style, table_name),
+            quote_identifier(quote_style, &primary_key_constraint_name(table_name)),
+            quote_identifier(quote_style, column_name)
+        ),
+        DatabaseKind::MySql => format!(
+            "ALTER TABLE {}.{}\n    ADD PRIMARY KEY ({});",
+            quote_identifier(quote_style, schema),
+            quote_identifier(quote_style, table_name),
+            quote_identifier(quote_style, column_name)
+        ),
+        DatabaseKind::Sqlite => format!(
+            "-- SQLite cannot directly add a primary key constraint.\n-- Rebuild {}.{} with {} as the PRIMARY KEY.",
+            quote_identifier(quote_style, schema),
+            quote_identifier(quote_style, table_name),
+            quote_identifier(quote_style, column_name)
+        ),
+    }
+}
+
+pub fn drop_primary_key_template(
+    kind: DatabaseKind,
+    quote_style: IdentifierQuoteStyle,
+    schema: &str,
+    table_name: &str,
+) -> String {
+    match kind {
+        DatabaseKind::Postgres => format!(
+            "ALTER TABLE {}.{}\n    DROP CONSTRAINT IF EXISTS {};",
+            quote_identifier(quote_style, schema),
+            quote_identifier(quote_style, table_name),
+            quote_identifier(quote_style, &primary_key_constraint_name(table_name))
+        ),
+        DatabaseKind::MySql => format!(
+            "ALTER TABLE {}.{}\n    DROP PRIMARY KEY;",
+            quote_identifier(quote_style, schema),
+            quote_identifier(quote_style, table_name)
+        ),
+        DatabaseKind::Sqlite => format!(
+            "-- SQLite cannot directly drop a primary key constraint.\n-- Rebuild {}.{} without the PRIMARY KEY definition.",
+            quote_identifier(quote_style, schema),
+            quote_identifier(quote_style, table_name)
+        ),
+    }
+}
+
+pub fn add_unique_constraint_template(
+    kind: DatabaseKind,
+    quote_style: IdentifierQuoteStyle,
+    schema: &str,
+    table_name: &str,
+    column_name: &str,
+) -> String {
+    match kind {
+        DatabaseKind::Postgres => format!(
+            "ALTER TABLE {}.{}\n    ADD CONSTRAINT {} UNIQUE ({});",
+            quote_identifier(quote_style, schema),
+            quote_identifier(quote_style, table_name),
+            quote_identifier(
+                quote_style,
+                &unique_constraint_name(table_name, column_name)
+            ),
+            quote_identifier(quote_style, column_name)
+        ),
+        DatabaseKind::MySql | DatabaseKind::Sqlite => create_index_template(
+            kind,
+            quote_style,
+            schema,
+            table_name,
+            CreateIndexTemplate {
+                index_name: &unique_constraint_name(table_name, column_name),
+                column_name,
+                unique: true,
+            },
+        ),
+    }
+}
+
+pub fn drop_unique_constraint_template(
+    kind: DatabaseKind,
+    quote_style: IdentifierQuoteStyle,
+    schema: &str,
+    table_name: &str,
+    column_name: &str,
+) -> String {
+    let index_name = unique_constraint_name(table_name, column_name);
+    match kind {
+        DatabaseKind::Postgres => format!(
+            "ALTER TABLE {}.{}\n    DROP CONSTRAINT IF EXISTS {};",
+            quote_identifier(quote_style, schema),
+            quote_identifier(quote_style, table_name),
+            quote_identifier(quote_style, &index_name)
+        ),
+        DatabaseKind::MySql | DatabaseKind::Sqlite => {
+            drop_index_template(kind, quote_style, schema, table_name, &index_name)
+        }
+    }
+}
+
+fn alter_column_template_postgres(
+    quote_style: IdentifierQuoteStyle,
+    schema: &str,
+    table_name: &str,
+    column: AlterColumnTemplate<'_>,
+) -> String {
+    let table = format!(
+        "{}.{}",
+        quote_identifier(quote_style, schema),
+        quote_identifier(quote_style, table_name)
+    );
+    let mut statements = Vec::new();
+    let active_name = if column.old_name != column.new_name {
+        statements.push(format!(
+            "ALTER TABLE {table}\n    RENAME COLUMN {} TO {};",
+            quote_identifier(quote_style, column.old_name),
+            quote_identifier(quote_style, column.new_name)
+        ));
+        column.new_name
+    } else {
+        column.old_name
+    };
+
+    if !column
+        .old_data_type
+        .eq_ignore_ascii_case(column.new_data_type)
+    {
+        statements.push(format!(
+            "ALTER TABLE {table}\n    ALTER COLUMN {} TYPE {};",
+            quote_identifier(quote_style, active_name),
+            column.new_data_type.trim()
+        ));
+    }
+
+    if column.old_nullable != column.new_nullable {
+        let nullability = if column.new_nullable {
+            "DROP NOT NULL"
+        } else {
+            "SET NOT NULL"
+        };
+        statements.push(format!(
+            "ALTER TABLE {table}\n    ALTER COLUMN {} {nullability};",
+            quote_identifier(quote_style, active_name)
+        ));
+    }
+
+    if normalize_optional_sql(column.old_default) != normalize_optional_sql(column.new_default) {
+        if let Some(default_value) = column.new_default.filter(|value| !value.trim().is_empty()) {
+            statements.push(format!(
+                "ALTER TABLE {table}\n    ALTER COLUMN {} SET DEFAULT {};",
+                quote_identifier(quote_style, active_name),
+                default_value.trim()
+            ));
+        } else {
+            statements.push(format!(
+                "ALTER TABLE {table}\n    ALTER COLUMN {} DROP DEFAULT;",
+                quote_identifier(quote_style, active_name)
+            ));
+        }
+    }
+
+    if statements.is_empty() {
+        format!("-- No structural changes for {table}.")
+    } else {
+        statements.join("\n")
+    }
+}
+
+fn primary_key_constraint_name(table_name: &str) -> String {
+    format!("{table_name}_pkey")
+}
+
+fn unique_constraint_name(table_name: &str, column_name: &str) -> String {
+    format!("{table_name}_{column_name}_key")
+}
+
+fn alter_column_template_mysql(
+    quote_style: IdentifierQuoteStyle,
+    schema: &str,
+    table_name: &str,
+    column: AlterColumnTemplate<'_>,
+) -> String {
+    let nullability = if column.new_nullable {
+        "NULL"
+    } else {
+        "NOT NULL"
+    };
+    format!(
+        "ALTER TABLE {}.{}\n    CHANGE COLUMN {} {} {} {};",
+        quote_identifier(quote_style, schema),
+        quote_identifier(quote_style, table_name),
+        quote_identifier(quote_style, column.old_name),
+        quote_identifier(quote_style, column.new_name),
+        column.new_data_type.trim(),
+        nullability
+    )
+}
+
+fn alter_column_template_sqlite(
+    quote_style: IdentifierQuoteStyle,
+    schema: &str,
+    table_name: &str,
+    column: AlterColumnTemplate<'_>,
+) -> String {
+    let table = format!(
+        "{}.{}",
+        quote_identifier(quote_style, schema),
+        quote_identifier(quote_style, table_name)
+    );
+    let mut statements = Vec::new();
+    if column.old_name != column.new_name {
+        statements.push(format!(
+            "ALTER TABLE {table}\n    RENAME COLUMN {} TO {};",
+            quote_identifier(quote_style, column.old_name),
+            quote_identifier(quote_style, column.new_name)
+        ));
+    }
+    if !column
+        .old_data_type
+        .eq_ignore_ascii_case(column.new_data_type)
+        || column.old_nullable != column.new_nullable
+    {
+        statements.push(
+            "-- SQLite cannot directly alter column type or nullability; rebuild the table manually."
+                .to_string(),
+        );
+    }
+
+    if statements.is_empty() {
+        format!("-- No structural changes for {table}.")
+    } else {
+        statements.join("\n")
+    }
+}
+
+fn create_table_column_type<'a>(
+    kind: DatabaseKind,
+    column: &'a CreateTableColumnTemplate<'a>,
+) -> &'a str {
+    if !column.auto_increment || kind != DatabaseKind::Postgres {
+        return column.data_type;
+    }
+
+    if column.data_type.eq_ignore_ascii_case("bigint") {
+        "bigserial"
+    } else {
+        "serial"
+    }
+}
+
+fn normalize_optional_sql(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
 fn editable_columns(columns: &[DbColumn]) -> Vec<&DbColumn> {
     let editable = columns
         .iter()
@@ -206,6 +706,7 @@ mod tests {
                 data_type: "integer".to_string(),
                 nullable: false,
                 has_default: true,
+                is_unique: false,
                 is_primary_key: true,
             },
             DbColumn {
@@ -213,6 +714,7 @@ mod tests {
                 data_type: "text".to_string(),
                 nullable: false,
                 has_default: false,
+                is_unique: false,
                 is_primary_key: false,
             },
         ]
@@ -270,5 +772,277 @@ mod tests {
         let sql = select_template(capabilities, &object, 100);
 
         assert_eq!(sql, "SELECT \"public\".\"refresh_sales\"(/* args */);");
+    }
+
+    #[test]
+    fn create_table_template_quotes_identifiers_and_renders_constraints() {
+        let sql = create_table_template(
+            DatabaseKind::Postgres,
+            IdentifierQuoteStyle::DoubleQuote,
+            "public",
+            "audit_log",
+            &[
+                CreateTableColumnTemplate {
+                    name: "id",
+                    data_type: "bigint",
+                    default_value: None,
+                    nullable: false,
+                    unique: false,
+                    auto_increment: false,
+                    primary_key: true,
+                },
+                CreateTableColumnTemplate {
+                    name: "message",
+                    data_type: "text",
+                    default_value: Some("'hello'"),
+                    nullable: true,
+                    unique: true,
+                    auto_increment: false,
+                    primary_key: false,
+                },
+            ],
+        );
+
+        assert!(sql.contains("CREATE TABLE \"public\".\"audit_log\""));
+        assert!(sql.contains("\"id\" bigint NOT NULL PRIMARY KEY"));
+        assert!(sql.contains("\"message\" text DEFAULT 'hello' UNIQUE"));
+    }
+
+    #[test]
+    fn create_table_template_renders_postgres_serial_column() {
+        let sql = create_table_template(
+            DatabaseKind::Postgres,
+            IdentifierQuoteStyle::DoubleQuote,
+            "public",
+            "users",
+            &[CreateTableColumnTemplate {
+                name: "id",
+                data_type: "integer",
+                default_value: None,
+                nullable: false,
+                unique: false,
+                auto_increment: true,
+                primary_key: true,
+            }],
+        );
+
+        assert!(sql.contains("\"id\" serial NOT NULL PRIMARY KEY"));
+    }
+
+    #[test]
+    fn create_table_template_renders_mysql_auto_increment_column() {
+        let sql = create_table_template(
+            DatabaseKind::MySql,
+            IdentifierQuoteStyle::Backtick,
+            "relora_demo",
+            "users",
+            &[CreateTableColumnTemplate {
+                name: "id",
+                data_type: "int",
+                default_value: None,
+                nullable: false,
+                unique: false,
+                auto_increment: true,
+                primary_key: true,
+            }],
+        );
+
+        assert!(sql.contains("`id` int NOT NULL AUTO_INCREMENT PRIMARY KEY"));
+    }
+
+    #[test]
+    fn create_table_template_renders_sqlite_autoincrement_column() {
+        let sql = create_table_template(
+            DatabaseKind::Sqlite,
+            IdentifierQuoteStyle::DoubleQuote,
+            "main",
+            "users",
+            &[CreateTableColumnTemplate {
+                name: "id",
+                data_type: "INTEGER",
+                default_value: None,
+                nullable: false,
+                unique: false,
+                auto_increment: true,
+                primary_key: true,
+            }],
+        );
+
+        assert!(sql.contains("\"id\" INTEGER PRIMARY KEY AUTOINCREMENT"));
+        assert!(!sql.contains("AUTOINCREMENT PRIMARY KEY"));
+    }
+
+    #[test]
+    fn alter_column_template_renders_postgres_rename_type_and_nullability_changes() {
+        let sql = alter_column_template(
+            DatabaseKind::Postgres,
+            IdentifierQuoteStyle::DoubleQuote,
+            "public",
+            "users",
+            AlterColumnTemplate {
+                old_name: "display_name",
+                new_name: "name",
+                old_data_type: "text",
+                new_data_type: "varchar(120)",
+                old_nullable: true,
+                new_nullable: false,
+                old_default: None,
+                new_default: None,
+            },
+        );
+
+        assert!(sql.contains("ALTER TABLE \"public\".\"users\""));
+        assert!(sql.contains("RENAME COLUMN \"display_name\" TO \"name\";"));
+        assert!(sql.contains("ALTER COLUMN \"name\" TYPE varchar(120);"));
+        assert!(sql.contains("ALTER COLUMN \"name\" SET NOT NULL;"));
+    }
+
+    #[test]
+    fn alter_column_template_renders_postgres_default_changes() {
+        let sql = alter_column_template(
+            DatabaseKind::Postgres,
+            IdentifierQuoteStyle::DoubleQuote,
+            "public",
+            "users",
+            AlterColumnTemplate {
+                old_name: "status",
+                new_name: "status",
+                old_data_type: "text",
+                new_data_type: "text",
+                old_nullable: false,
+                new_nullable: false,
+                old_default: None,
+                new_default: Some("'draft'"),
+            },
+        );
+
+        assert!(sql.contains("ALTER COLUMN \"status\" SET DEFAULT 'draft';"));
+    }
+
+    #[test]
+    fn add_column_template_renders_postgres_column_definition() {
+        let sql = add_column_template(
+            DatabaseKind::Postgres,
+            IdentifierQuoteStyle::DoubleQuote,
+            "public",
+            "users",
+            AddColumnTemplate {
+                name: "status",
+                data_type: "text",
+                nullable: false,
+                default_value: Some("'draft'"),
+            },
+        );
+
+        assert!(sql.contains("ALTER TABLE \"public\".\"users\""));
+        assert!(sql.contains("ADD COLUMN \"status\" text DEFAULT 'draft' NOT NULL;"));
+    }
+
+    #[test]
+    fn primary_key_templates_render_postgres_constraint_statements() {
+        let drop_sql = drop_primary_key_template(
+            DatabaseKind::Postgres,
+            IdentifierQuoteStyle::DoubleQuote,
+            "public",
+            "users",
+        );
+        let add_sql = add_primary_key_template(
+            DatabaseKind::Postgres,
+            IdentifierQuoteStyle::DoubleQuote,
+            "public",
+            "users",
+            "email",
+        );
+
+        assert!(drop_sql.contains("DROP CONSTRAINT IF EXISTS \"users_pkey\";"));
+        assert!(add_sql.contains("ADD CONSTRAINT \"users_pkey\" PRIMARY KEY (\"email\");"));
+    }
+
+    #[test]
+    fn unique_constraint_templates_render_postgres_constraint_statements() {
+        let drop_sql = drop_unique_constraint_template(
+            DatabaseKind::Postgres,
+            IdentifierQuoteStyle::DoubleQuote,
+            "public",
+            "users",
+            "handle",
+        );
+        let add_sql = add_unique_constraint_template(
+            DatabaseKind::Postgres,
+            IdentifierQuoteStyle::DoubleQuote,
+            "public",
+            "users",
+            "handle",
+        );
+
+        assert!(drop_sql.contains("DROP CONSTRAINT IF EXISTS \"users_handle_key\";"));
+        assert!(add_sql.contains("ADD CONSTRAINT \"users_handle_key\" UNIQUE (\"handle\");"));
+    }
+
+    #[test]
+    fn rename_table_template_renders_postgres_statement() {
+        let sql = rename_table_template(
+            DatabaseKind::Postgres,
+            IdentifierQuoteStyle::DoubleQuote,
+            "public",
+            RenameTableTemplate {
+                old_name: "users",
+                new_name: "members",
+            },
+        );
+
+        assert_eq!(
+            sql,
+            "ALTER TABLE \"public\".\"users\"\n    RENAME TO \"members\";"
+        );
+    }
+
+    #[test]
+    fn drop_column_template_renders_postgres_statement() {
+        let sql = drop_column_template(
+            DatabaseKind::Postgres,
+            IdentifierQuoteStyle::DoubleQuote,
+            "public",
+            "users",
+            "status",
+        );
+
+        assert_eq!(
+            sql,
+            "ALTER TABLE \"public\".\"users\"\n    DROP COLUMN \"status\";"
+        );
+    }
+
+    #[test]
+    fn create_index_template_renders_postgres_statement() {
+        let sql = create_index_template(
+            DatabaseKind::Postgres,
+            IdentifierQuoteStyle::DoubleQuote,
+            "public",
+            "users",
+            CreateIndexTemplate {
+                index_name: "users_status_idx",
+                column_name: "status",
+                unique: true,
+            },
+        );
+
+        assert_eq!(
+            sql,
+            "CREATE UNIQUE INDEX \"users_status_idx\"\n    ON \"public\".\"users\" (\"status\");"
+        );
+    }
+
+    #[test]
+    fn drop_index_template_renders_postgres_statement() {
+        let sql = drop_index_template(
+            DatabaseKind::Postgres,
+            IdentifierQuoteStyle::DoubleQuote,
+            "public",
+            "users",
+            "users_status_idx",
+        );
+
+        assert_eq!(sql, "DROP INDEX \"public\".\"users_status_idx\";");
     }
 }

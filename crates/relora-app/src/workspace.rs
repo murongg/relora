@@ -20,15 +20,26 @@ use crate::{
         StagedCrudSql, copy_row_text, explain_sql, primary_key_names, staged_delete_sql,
         staged_insert_sql, staged_update_sql, where_clause_for_row,
     },
-    templates::{delete_template, insert_template, select_template, update_template},
+    templates::{
+        AddColumnTemplate, AlterColumnTemplate, CreateIndexTemplate, CreateTableColumnTemplate,
+        RenameTableTemplate, add_column_template, add_primary_key_template,
+        add_unique_constraint_template, alter_column_template, create_index_template,
+        create_table_template, delete_template, drop_column_template, drop_index_template,
+        drop_primary_key_template, drop_unique_constraint_template, insert_template,
+        rename_table_template, select_template, update_template,
+    },
     tree::{TreeEntry, TreeNodeKey, TreeRow},
     view::{
-        CellEditView, CommandPaletteItemView, CommandPaletteView, DataFilterView,
-        DeleteConfirmationView, EditorCompletionView, EditorView, InsertRowDatePickerSnapshot,
+        AddColumnFieldFocusView, AddColumnFormSnapshot, AlterColumnFieldFocusView,
+        AlterColumnFormSnapshot, CellEditView, CommandPaletteItemView, CommandPaletteView,
+        CreateIndexFormSnapshot, CreateTableColumnSnapshot, CreateTableFieldFocusView,
+        CreateTableFormSnapshot, DataFilterView, DeleteConfirmationView, DropIndexFormSnapshot,
+        EditorCompletionView, EditorView, InsertRowDatePickerSnapshot,
         InsertRowDateTimeSegmentView, InsertRowFieldKindView, InsertRowFieldSnapshot,
-        InsertRowFormSnapshot, RightPaneTab, RightPaneTabView, RowInspectorPane, RowInspectorView,
-        SaveSqlDialogView, SavedSqlView, SqlHistoryView, StagedCrudView, StructureView,
-        WorkspaceView,
+        InsertRowFormSnapshot, RenameTableFormSnapshot, RightPaneTab, RightPaneTabView,
+        RowInspectorPane, RowInspectorView, SaveSqlDialogView, SavedSqlView, SqlHistoryView,
+        StagedCrudView, StructureEditorColumnSnapshot, StructureEditorFieldFocusView,
+        StructureEditorFormSnapshot, StructureView, WorkspaceView,
     },
 };
 
@@ -91,6 +102,62 @@ pub enum WorkspaceAction {
     OpenSaveSqlDialog,
     CloseSaveSqlDialog,
     ConfirmSaveSql,
+    OpenCreateTableForm,
+    CloseCreateTableForm,
+    NextCreateTableField,
+    PreviousCreateTableField,
+    MoveCreateTableFieldLeft,
+    MoveCreateTableFieldRight,
+    CycleCreateTableColumnTypeNext,
+    CycleCreateTableColumnTypePrevious,
+    ToggleCreateTableColumnNullable,
+    ToggleCreateTableColumnUnique,
+    ToggleCreateTableColumnAutoIncrement,
+    ToggleCreateTableColumnPrimaryKey,
+    AddCreateTableColumn,
+    RemoveCreateTableColumn,
+    PreviewCreateTableForm,
+    OpenStructureEditor,
+    CloseStructureEditorForm,
+    NextStructureEditorField,
+    PreviousStructureEditorField,
+    MoveStructureEditorFieldLeft,
+    MoveStructureEditorFieldRight,
+    CycleStructureEditorColumnTypeNext,
+    CycleStructureEditorColumnTypePrevious,
+    ToggleStructureEditorNullable,
+    ToggleStructureEditorUnique,
+    ToggleStructureEditorPrimaryKey,
+    AddStructureEditorColumn,
+    RemoveStructureEditorColumn,
+    PreviewStructureEditorForm,
+    OpenAlterColumnForm,
+    CloseAlterColumnForm,
+    NextAlterColumnField,
+    PreviousAlterColumnField,
+    CycleAlterColumnTypeNext,
+    CycleAlterColumnTypePrevious,
+    ToggleAlterColumnNullable,
+    PreviewAlterColumnForm,
+    OpenAddColumnForm,
+    CloseAddColumnForm,
+    NextAddColumnField,
+    PreviousAddColumnField,
+    CycleAddColumnTypeNext,
+    CycleAddColumnTypePrevious,
+    ToggleAddColumnNullable,
+    PreviewAddColumnForm,
+    OpenRenameTableForm,
+    CloseRenameTableForm,
+    PreviewRenameTableForm,
+    PromptDropStructureColumn,
+    OpenCreateIndexForm,
+    CloseCreateIndexForm,
+    ToggleCreateIndexUnique,
+    PreviewCreateIndexForm,
+    OpenDropIndexForm,
+    CloseDropIndexForm,
+    PreviewDropIndexForm,
     OpenInsertRowForm,
     CloseInsertRowForm,
     NextInsertRowField,
@@ -206,6 +273,13 @@ const PALETTE_COMMANDS: &[PaletteCommand] = &[
             hint: "Save the active SQL editor buffer for later reuse",
         },
         action: WorkspaceAction::OpenSaveSqlDialog,
+    },
+    PaletteCommand {
+        item: CommandPaletteItemView {
+            title: "Create Table",
+            hint: "Open a form that generates CREATE TABLE SQL in the current schema",
+        },
+        action: WorkspaceAction::OpenCreateTableForm,
     },
     PaletteCommand {
         item: CommandPaletteItemView {
@@ -343,6 +417,13 @@ pub struct WorkspaceApp {
     sql_history: SqlHistoryState,
     saved_sql: SavedSqlState,
     save_sql_dialog: Option<SaveSqlDialogState>,
+    create_table_form: Option<CreateTableFormState>,
+    structure_editor_form: Option<StructureEditorFormState>,
+    alter_column_form: Option<AlterColumnFormState>,
+    add_column_form: Option<AddColumnFormState>,
+    rename_table_form: Option<RenameTableFormState>,
+    create_index_form: Option<CreateIndexFormState>,
+    drop_index_form: Option<DropIndexFormState>,
     insert_row_form: Option<InsertRowFormState>,
     data_filter: Option<DataFilterState>,
     active_data_filter: Option<String>,
@@ -382,15 +463,20 @@ struct ConnectionSession {
 #[derive(Default)]
 struct PendingSessionWork {
     preview_request: Option<PendingPreviewRequest>,
-    refresh_request_id: Option<u64>,
+    refresh_request: Option<PendingRefreshRequest>,
     group_request_ids: BTreeMap<(String, String, DbObjectKind), u64>,
     template_request: Option<PendingTemplateRequest>,
     structure_request: Option<PendingStructureRequest>,
-    execute_requests: BTreeMap<u64, usize>,
+    execute_requests: BTreeMap<u64, PendingExecuteRequest>,
 }
 
 struct PendingPreviewRequest {
     request_id: u64,
+}
+
+struct PendingRefreshRequest {
+    request_id: u64,
+    selection_target: Option<DbObjectRef>,
 }
 
 struct PendingTemplateRequest {
@@ -402,6 +488,11 @@ struct PendingTemplateRequest {
 struct PendingStructureRequest {
     request_id: u64,
     object: DbObjectRef,
+}
+
+struct PendingExecuteRequest {
+    tab_id: usize,
+    refresh_target: Option<DbObjectRef>,
 }
 
 #[derive(Default)]
@@ -441,6 +532,282 @@ struct DataFilterState {
 
 struct SaveSqlDialogState {
     name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CreateTableFieldFocus {
+    TableName,
+    ColumnName,
+    ColumnType,
+    DefaultValue,
+    Nullable,
+    Unique,
+    AutoIncrement,
+    PrimaryKey,
+}
+
+impl CreateTableFieldFocus {
+    fn cycle(self, delta: isize) -> Self {
+        const ORDER: [CreateTableFieldFocus; 7] = [
+            CreateTableFieldFocus::ColumnName,
+            CreateTableFieldFocus::ColumnType,
+            CreateTableFieldFocus::DefaultValue,
+            CreateTableFieldFocus::Nullable,
+            CreateTableFieldFocus::Unique,
+            CreateTableFieldFocus::AutoIncrement,
+            CreateTableFieldFocus::PrimaryKey,
+        ];
+        let current_index = ORDER.iter().position(|focus| *focus == self).unwrap_or(0);
+        let len = ORDER.len();
+        let offset = delta.unsigned_abs() % len;
+        let next_index = if delta.is_negative() {
+            (current_index + len - offset) % len
+        } else {
+            (current_index + offset) % len
+        };
+        ORDER[next_index]
+    }
+
+    fn into_view(self) -> CreateTableFieldFocusView {
+        match self {
+            Self::TableName => CreateTableFieldFocusView::TableName,
+            Self::ColumnName => CreateTableFieldFocusView::ColumnName,
+            Self::ColumnType => CreateTableFieldFocusView::ColumnType,
+            Self::DefaultValue => CreateTableFieldFocusView::DefaultValue,
+            Self::Nullable => CreateTableFieldFocusView::Nullable,
+            Self::Unique => CreateTableFieldFocusView::Unique,
+            Self::AutoIncrement => CreateTableFieldFocusView::AutoIncrement,
+            Self::PrimaryKey => CreateTableFieldFocusView::PrimaryKey,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CreateTableTypeOption {
+    label: &'static str,
+    sql: &'static str,
+}
+
+#[derive(Clone)]
+struct CreateTableColumnState {
+    name: String,
+    type_index: usize,
+    default_value: String,
+    nullable: bool,
+    unique: bool,
+    auto_increment: bool,
+    primary_key: bool,
+}
+
+struct CreateTableFormState {
+    connection_index: usize,
+    database_name: String,
+    schema_name: String,
+    table_name: String,
+    selected_row: usize,
+    selected_focus: CreateTableFieldFocus,
+    columns: Vec<CreateTableColumnState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AlterColumnFieldFocus {
+    ColumnName,
+    ColumnType,
+    DefaultValue,
+    Nullable,
+}
+
+impl AlterColumnFieldFocus {
+    fn cycle(self, delta: isize) -> Self {
+        const ORDER: [AlterColumnFieldFocus; 4] = [
+            AlterColumnFieldFocus::ColumnName,
+            AlterColumnFieldFocus::ColumnType,
+            AlterColumnFieldFocus::DefaultValue,
+            AlterColumnFieldFocus::Nullable,
+        ];
+        let current_index = ORDER.iter().position(|focus| *focus == self).unwrap_or(0);
+        let len = ORDER.len();
+        let offset = delta.unsigned_abs() % len;
+        let next_index = if delta.is_negative() {
+            (current_index + len - offset) % len
+        } else {
+            (current_index + offset) % len
+        };
+        ORDER[next_index]
+    }
+
+    fn into_view(self) -> AlterColumnFieldFocusView {
+        match self {
+            Self::ColumnName => AlterColumnFieldFocusView::ColumnName,
+            Self::ColumnType => AlterColumnFieldFocusView::ColumnType,
+            Self::DefaultValue => AlterColumnFieldFocusView::DefaultValue,
+            Self::Nullable => AlterColumnFieldFocusView::Nullable,
+        }
+    }
+}
+
+struct AlterColumnFormState {
+    connection_index: usize,
+    database_name: String,
+    schema_name: String,
+    table_name: String,
+    old_name: String,
+    new_name: String,
+    old_data_type: String,
+    type_index: usize,
+    old_nullable: bool,
+    nullable: bool,
+    default_value: String,
+    selected_focus: AlterColumnFieldFocus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AddColumnFieldFocus {
+    ColumnName,
+    ColumnType,
+    Nullable,
+    DefaultValue,
+}
+
+impl AddColumnFieldFocus {
+    fn cycle(self, delta: isize) -> Self {
+        const ORDER: [AddColumnFieldFocus; 4] = [
+            AddColumnFieldFocus::ColumnName,
+            AddColumnFieldFocus::ColumnType,
+            AddColumnFieldFocus::DefaultValue,
+            AddColumnFieldFocus::Nullable,
+        ];
+        let current_index = ORDER.iter().position(|focus| *focus == self).unwrap_or(0);
+        let len = ORDER.len();
+        let offset = delta.unsigned_abs() % len;
+        let next_index = if delta.is_negative() {
+            (current_index + len - offset) % len
+        } else {
+            (current_index + offset) % len
+        };
+        ORDER[next_index]
+    }
+
+    fn into_view(self) -> AddColumnFieldFocusView {
+        match self {
+            Self::ColumnName => AddColumnFieldFocusView::ColumnName,
+            Self::ColumnType => AddColumnFieldFocusView::ColumnType,
+            Self::Nullable => AddColumnFieldFocusView::Nullable,
+            Self::DefaultValue => AddColumnFieldFocusView::DefaultValue,
+        }
+    }
+}
+
+struct AddColumnFormState {
+    connection_index: usize,
+    database_name: String,
+    schema_name: String,
+    table_name: String,
+    name: String,
+    type_index: usize,
+    nullable: bool,
+    default_value: String,
+    selected_focus: AddColumnFieldFocus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StructureEditorFieldFocus {
+    TableName,
+    ColumnName,
+    ColumnType,
+    DefaultValue,
+    Nullable,
+    Unique,
+    PrimaryKey,
+}
+
+impl StructureEditorFieldFocus {
+    fn cycle(self, delta: isize) -> Self {
+        const ORDER: [StructureEditorFieldFocus; 6] = [
+            StructureEditorFieldFocus::ColumnName,
+            StructureEditorFieldFocus::ColumnType,
+            StructureEditorFieldFocus::DefaultValue,
+            StructureEditorFieldFocus::Nullable,
+            StructureEditorFieldFocus::Unique,
+            StructureEditorFieldFocus::PrimaryKey,
+        ];
+        let current_index = ORDER.iter().position(|focus| *focus == self).unwrap_or(0);
+        let len = ORDER.len();
+        let offset = delta.unsigned_abs() % len;
+        let next_index = if delta.is_negative() {
+            (current_index + len - offset) % len
+        } else {
+            (current_index + offset) % len
+        };
+        ORDER[next_index]
+    }
+
+    fn into_view(self) -> StructureEditorFieldFocusView {
+        match self {
+            Self::TableName => StructureEditorFieldFocusView::TableName,
+            Self::ColumnName => StructureEditorFieldFocusView::ColumnName,
+            Self::ColumnType => StructureEditorFieldFocusView::ColumnType,
+            Self::DefaultValue => StructureEditorFieldFocusView::DefaultValue,
+            Self::Nullable => StructureEditorFieldFocusView::Nullable,
+            Self::Unique => StructureEditorFieldFocusView::Unique,
+            Self::PrimaryKey => StructureEditorFieldFocusView::PrimaryKey,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct StructureEditorColumnState {
+    original_name: Option<String>,
+    original_data_type: Option<String>,
+    original_nullable: Option<bool>,
+    original_default: Option<String>,
+    original_unique: Option<bool>,
+    original_primary_key: Option<bool>,
+    name: String,
+    data_type: String,
+    default_value: String,
+    nullable: bool,
+    unique: bool,
+    primary_key: bool,
+}
+
+struct StructureEditorFormState {
+    connection_index: usize,
+    database_name: String,
+    schema_name: String,
+    old_table_name: String,
+    object_kind: DbObjectKind,
+    table_name: String,
+    selected_row: usize,
+    selected_focus: StructureEditorFieldFocus,
+    anchor_row: usize,
+    columns: Vec<StructureEditorColumnState>,
+}
+
+struct RenameTableFormState {
+    connection_index: usize,
+    database_name: String,
+    schema_name: String,
+    old_name: String,
+    new_name: String,
+}
+
+struct CreateIndexFormState {
+    connection_index: usize,
+    database_name: String,
+    schema_name: String,
+    table_name: String,
+    column_name: String,
+    index_name: String,
+    unique: bool,
+}
+
+struct DropIndexFormState {
+    connection_index: usize,
+    database_name: String,
+    schema_name: String,
+    table_name: String,
+    index_name: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -577,12 +944,21 @@ struct DeleteConfirmationState {
 }
 
 enum PendingDeleteOperation {
-    ExecuteSql {
+    ExecuteStatement {
         connection_index: usize,
         sql: String,
         status: Option<String>,
+        refresh_target: Option<DbObjectRef>,
     },
-    DeleteSavedSql {
+    PreviewInEditor {
+        connection_index: usize,
+        database_name: String,
+        title: String,
+        sql: String,
+        status: Option<String>,
+        refresh_target: Option<DbObjectRef>,
+    },
+    DeleteSavedQuery {
         name: String,
         tab_id: usize,
     },
@@ -679,6 +1055,7 @@ struct SqlEditorTab {
     result_sets: Vec<EditorResultSet>,
     selected_result: usize,
     pending_execute_request_id: Option<u64>,
+    post_execute_refresh_target: Option<DbObjectRef>,
     result_strip: String,
 }
 
@@ -796,6 +1173,13 @@ impl WorkspaceApp {
             sql_history: SqlHistoryState::default(),
             saved_sql: SavedSqlState::default(),
             save_sql_dialog: None,
+            create_table_form: None,
+            structure_editor_form: None,
+            alter_column_form: None,
+            add_column_form: None,
+            rename_table_form: None,
+            create_index_form: None,
+            drop_index_form: None,
             insert_row_form: None,
             data_filter: None,
             active_data_filter: None,
@@ -859,6 +1243,62 @@ impl WorkspaceApp {
                 | WorkspaceAction::PreviousSavedSqlItem
                 | WorkspaceAction::OpenSaveSqlDialog
                 | WorkspaceAction::CloseSaveSqlDialog
+                | WorkspaceAction::OpenCreateTableForm
+                | WorkspaceAction::CloseCreateTableForm
+                | WorkspaceAction::NextCreateTableField
+                | WorkspaceAction::PreviousCreateTableField
+                | WorkspaceAction::MoveCreateTableFieldLeft
+                | WorkspaceAction::MoveCreateTableFieldRight
+                | WorkspaceAction::CycleCreateTableColumnTypeNext
+                | WorkspaceAction::CycleCreateTableColumnTypePrevious
+                | WorkspaceAction::ToggleCreateTableColumnNullable
+                | WorkspaceAction::ToggleCreateTableColumnUnique
+                | WorkspaceAction::ToggleCreateTableColumnAutoIncrement
+                | WorkspaceAction::ToggleCreateTableColumnPrimaryKey
+                | WorkspaceAction::AddCreateTableColumn
+                | WorkspaceAction::RemoveCreateTableColumn
+                | WorkspaceAction::PreviewCreateTableForm
+                | WorkspaceAction::OpenStructureEditor
+                | WorkspaceAction::CloseStructureEditorForm
+                | WorkspaceAction::NextStructureEditorField
+                | WorkspaceAction::PreviousStructureEditorField
+                | WorkspaceAction::MoveStructureEditorFieldLeft
+                | WorkspaceAction::MoveStructureEditorFieldRight
+                | WorkspaceAction::CycleStructureEditorColumnTypeNext
+                | WorkspaceAction::CycleStructureEditorColumnTypePrevious
+                | WorkspaceAction::ToggleStructureEditorNullable
+                | WorkspaceAction::ToggleStructureEditorUnique
+                | WorkspaceAction::ToggleStructureEditorPrimaryKey
+                | WorkspaceAction::AddStructureEditorColumn
+                | WorkspaceAction::RemoveStructureEditorColumn
+                | WorkspaceAction::PreviewStructureEditorForm
+                | WorkspaceAction::OpenAlterColumnForm
+                | WorkspaceAction::CloseAlterColumnForm
+                | WorkspaceAction::NextAlterColumnField
+                | WorkspaceAction::PreviousAlterColumnField
+                | WorkspaceAction::CycleAlterColumnTypeNext
+                | WorkspaceAction::CycleAlterColumnTypePrevious
+                | WorkspaceAction::ToggleAlterColumnNullable
+                | WorkspaceAction::PreviewAlterColumnForm
+                | WorkspaceAction::OpenAddColumnForm
+                | WorkspaceAction::CloseAddColumnForm
+                | WorkspaceAction::NextAddColumnField
+                | WorkspaceAction::PreviousAddColumnField
+                | WorkspaceAction::CycleAddColumnTypeNext
+                | WorkspaceAction::CycleAddColumnTypePrevious
+                | WorkspaceAction::ToggleAddColumnNullable
+                | WorkspaceAction::PreviewAddColumnForm
+                | WorkspaceAction::OpenRenameTableForm
+                | WorkspaceAction::CloseRenameTableForm
+                | WorkspaceAction::PreviewRenameTableForm
+                | WorkspaceAction::PromptDropStructureColumn
+                | WorkspaceAction::OpenCreateIndexForm
+                | WorkspaceAction::CloseCreateIndexForm
+                | WorkspaceAction::ToggleCreateIndexUnique
+                | WorkspaceAction::PreviewCreateIndexForm
+                | WorkspaceAction::OpenDropIndexForm
+                | WorkspaceAction::CloseDropIndexForm
+                | WorkspaceAction::PreviewDropIndexForm
                 | WorkspaceAction::OpenInsertRowForm
                 | WorkspaceAction::CloseInsertRowForm
                 | WorkspaceAction::NextInsertRowField
@@ -975,6 +1415,175 @@ impl WorkspaceApp {
             WorkspaceAction::CloseSaveSqlDialog => self.close_save_sql_dialog(),
             WorkspaceAction::ConfirmSaveSql => {
                 let result = self.confirm_save_sql();
+                self.handle_error(result);
+            }
+            WorkspaceAction::OpenCreateTableForm => {
+                let result = self.open_create_table_form();
+                self.handle_error(result);
+            }
+            WorkspaceAction::CloseCreateTableForm => self.close_create_table_form(),
+            WorkspaceAction::NextCreateTableField => self.move_create_table_form_selection(1),
+            WorkspaceAction::PreviousCreateTableField => self.move_create_table_form_selection(-1),
+            WorkspaceAction::MoveCreateTableFieldLeft => self.move_create_table_form_focus(-1),
+            WorkspaceAction::MoveCreateTableFieldRight => self.move_create_table_form_focus(1),
+            WorkspaceAction::CycleCreateTableColumnTypeNext => {
+                let result = self.cycle_create_table_form_column_type(1);
+                self.handle_error(result);
+            }
+            WorkspaceAction::CycleCreateTableColumnTypePrevious => {
+                let result = self.cycle_create_table_form_column_type(-1);
+                self.handle_error(result);
+            }
+            WorkspaceAction::ToggleCreateTableColumnNullable => {
+                let result = self.toggle_create_table_form_nullable();
+                self.handle_error(result);
+            }
+            WorkspaceAction::ToggleCreateTableColumnUnique => {
+                let result = self.toggle_create_table_form_unique();
+                self.handle_error(result);
+            }
+            WorkspaceAction::ToggleCreateTableColumnAutoIncrement => {
+                let result = self.toggle_create_table_form_auto_increment();
+                self.handle_error(result);
+            }
+            WorkspaceAction::ToggleCreateTableColumnPrimaryKey => {
+                let result = self.toggle_create_table_form_primary_key();
+                self.handle_error(result);
+            }
+            WorkspaceAction::AddCreateTableColumn => self.add_create_table_form_column(),
+            WorkspaceAction::RemoveCreateTableColumn => {
+                let result = self.remove_create_table_form_column();
+                self.handle_error(result);
+            }
+            WorkspaceAction::PreviewCreateTableForm => {
+                let result = self.preview_create_table_form();
+                self.handle_error(result);
+            }
+            WorkspaceAction::OpenStructureEditor => {
+                let result = self.open_structure_editor();
+                self.handle_error(result);
+            }
+            WorkspaceAction::CloseStructureEditorForm => self.close_structure_editor_form(),
+            WorkspaceAction::NextStructureEditorField => {
+                self.move_structure_editor_form_selection(1)
+            }
+            WorkspaceAction::PreviousStructureEditorField => {
+                self.move_structure_editor_form_selection(-1)
+            }
+            WorkspaceAction::MoveStructureEditorFieldLeft => {
+                self.move_structure_editor_form_focus(-1)
+            }
+            WorkspaceAction::MoveStructureEditorFieldRight => {
+                self.move_structure_editor_form_focus(1)
+            }
+            WorkspaceAction::CycleStructureEditorColumnTypeNext => {
+                let result = self.cycle_structure_editor_form_column_type(1);
+                self.handle_error(result);
+            }
+            WorkspaceAction::CycleStructureEditorColumnTypePrevious => {
+                let result = self.cycle_structure_editor_form_column_type(-1);
+                self.handle_error(result);
+            }
+            WorkspaceAction::ToggleStructureEditorNullable => {
+                let result = self.toggle_structure_editor_form_nullable();
+                self.handle_error(result);
+            }
+            WorkspaceAction::ToggleStructureEditorUnique => {
+                let result = self.toggle_structure_editor_form_unique();
+                self.handle_error(result);
+            }
+            WorkspaceAction::ToggleStructureEditorPrimaryKey => {
+                let result = self.toggle_structure_editor_form_primary_key();
+                self.handle_error(result);
+            }
+            WorkspaceAction::AddStructureEditorColumn => self.add_structure_editor_form_column(),
+            WorkspaceAction::RemoveStructureEditorColumn => {
+                let result = self.remove_structure_editor_form_column();
+                self.handle_error(result);
+            }
+            WorkspaceAction::PreviewStructureEditorForm => {
+                let result = self.preview_structure_editor_form();
+                self.handle_error(result);
+            }
+            WorkspaceAction::OpenAlterColumnForm => {
+                let result = self.open_alter_column_form();
+                self.handle_error(result);
+            }
+            WorkspaceAction::CloseAlterColumnForm => self.close_alter_column_form(),
+            WorkspaceAction::NextAlterColumnField => self.move_alter_column_form_focus(1),
+            WorkspaceAction::PreviousAlterColumnField => self.move_alter_column_form_focus(-1),
+            WorkspaceAction::CycleAlterColumnTypeNext => {
+                let result = self.cycle_alter_column_form_type(1);
+                self.handle_error(result);
+            }
+            WorkspaceAction::CycleAlterColumnTypePrevious => {
+                let result = self.cycle_alter_column_form_type(-1);
+                self.handle_error(result);
+            }
+            WorkspaceAction::ToggleAlterColumnNullable => {
+                let result = self.toggle_alter_column_form_nullable();
+                self.handle_error(result);
+            }
+            WorkspaceAction::PreviewAlterColumnForm => {
+                let result = self.preview_alter_column_form();
+                self.handle_error(result);
+            }
+            WorkspaceAction::OpenAddColumnForm => {
+                let result = self.open_add_column_form();
+                self.handle_error(result);
+            }
+            WorkspaceAction::CloseAddColumnForm => self.close_add_column_form(),
+            WorkspaceAction::NextAddColumnField => self.move_add_column_form_focus(1),
+            WorkspaceAction::PreviousAddColumnField => self.move_add_column_form_focus(-1),
+            WorkspaceAction::CycleAddColumnTypeNext => {
+                let result = self.cycle_add_column_form_type(1);
+                self.handle_error(result);
+            }
+            WorkspaceAction::CycleAddColumnTypePrevious => {
+                let result = self.cycle_add_column_form_type(-1);
+                self.handle_error(result);
+            }
+            WorkspaceAction::ToggleAddColumnNullable => {
+                let result = self.toggle_add_column_form_nullable();
+                self.handle_error(result);
+            }
+            WorkspaceAction::PreviewAddColumnForm => {
+                let result = self.preview_add_column_form();
+                self.handle_error(result);
+            }
+            WorkspaceAction::OpenRenameTableForm => {
+                let result = self.open_rename_table_form();
+                self.handle_error(result);
+            }
+            WorkspaceAction::CloseRenameTableForm => self.close_rename_table_form(),
+            WorkspaceAction::PreviewRenameTableForm => {
+                let result = self.preview_rename_table_form();
+                self.handle_error(result);
+            }
+            WorkspaceAction::PromptDropStructureColumn => {
+                let result = self.prompt_drop_structure_column();
+                self.handle_error(result);
+            }
+            WorkspaceAction::OpenCreateIndexForm => {
+                let result = self.open_create_index_form();
+                self.handle_error(result);
+            }
+            WorkspaceAction::CloseCreateIndexForm => self.close_create_index_form(),
+            WorkspaceAction::ToggleCreateIndexUnique => {
+                let result = self.toggle_create_index_form_unique();
+                self.handle_error(result);
+            }
+            WorkspaceAction::PreviewCreateIndexForm => {
+                let result = self.preview_create_index_form();
+                self.handle_error(result);
+            }
+            WorkspaceAction::OpenDropIndexForm => {
+                let result = self.open_drop_index_form();
+                self.handle_error(result);
+            }
+            WorkspaceAction::CloseDropIndexForm => self.close_drop_index_form(),
+            WorkspaceAction::PreviewDropIndexForm => {
+                let result = self.preview_drop_index_form();
                 self.handle_error(result);
             }
             WorkspaceAction::OpenInsertRowForm => {
@@ -1237,6 +1846,13 @@ impl WorkspaceApp {
             sql_history: self.sql_history.view(),
             saved_sql: self.saved_sql.view(),
             save_sql_dialog: self.save_sql_dialog_view(),
+            create_table_form_open: self.create_table_form_open(),
+            structure_editor_form_open: self.structure_editor_form.is_some(),
+            alter_column_form_open: self.alter_column_form.is_some(),
+            add_column_form_open: self.add_column_form.is_some(),
+            rename_table_form_open: self.rename_table_form.is_some(),
+            create_index_form_open: self.create_index_form.is_some(),
+            drop_index_form_open: self.drop_index_form.is_some(),
             insert_row_form_open: self.insert_row_form_open(),
             data_filter: self.data_filter_view(),
             cell_edit: self.cell_edit_view(),
@@ -1397,6 +2013,34 @@ impl WorkspaceApp {
         self.save_sql_dialog.is_some()
     }
 
+    pub fn create_table_form_open(&self) -> bool {
+        self.create_table_form.is_some()
+    }
+
+    pub fn structure_editor_form_open(&self) -> bool {
+        self.structure_editor_form.is_some()
+    }
+
+    pub fn alter_column_form_open(&self) -> bool {
+        self.alter_column_form.is_some()
+    }
+
+    pub fn add_column_form_open(&self) -> bool {
+        self.add_column_form.is_some()
+    }
+
+    pub fn rename_table_form_open(&self) -> bool {
+        self.rename_table_form.is_some()
+    }
+
+    pub fn create_index_form_open(&self) -> bool {
+        self.create_index_form.is_some()
+    }
+
+    pub fn drop_index_form_open(&self) -> bool {
+        self.drop_index_form.is_some()
+    }
+
     pub fn insert_row_form_open(&self) -> bool {
         self.insert_row_form.is_some()
     }
@@ -1445,6 +2089,364 @@ impl WorkspaceApp {
             .as_mut()
             .ok_or_else(|| anyhow!("save SQL dialog is not open"))?;
         dialog.name.clear();
+        Ok(())
+    }
+
+    pub fn insert_create_table_form_char(&mut self, ch: char) -> Result<()> {
+        let form = self
+            .create_table_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("create table form is not open"))?;
+
+        match create_table_active_text_target(form) {
+            Some(target) => {
+                target.push(ch);
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+
+    pub fn backspace_create_table_form(&mut self) -> Result<()> {
+        let form = self
+            .create_table_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("create table form is not open"))?;
+
+        match create_table_active_text_target(form) {
+            Some(target) => {
+                target.pop();
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+
+    pub fn clear_create_table_form_field(&mut self) -> Result<()> {
+        let form = self
+            .create_table_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("create table form is not open"))?;
+
+        match create_table_active_text_target(form) {
+            Some(target) => {
+                target.clear();
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+
+    pub fn create_table_form_selected_field_is_type(&self) -> bool {
+        self.create_table_form.as_ref().is_some_and(|form| {
+            form.selected_row > 0 && form.selected_focus == CreateTableFieldFocus::ColumnType
+        })
+    }
+
+    pub fn create_table_form_selected_field_is_toggle(&self) -> bool {
+        self.create_table_form.as_ref().is_some_and(|form| {
+            form.selected_row > 0
+                && matches!(
+                    form.selected_focus,
+                    CreateTableFieldFocus::Nullable
+                        | CreateTableFieldFocus::Unique
+                        | CreateTableFieldFocus::AutoIncrement
+                        | CreateTableFieldFocus::PrimaryKey
+                )
+        })
+    }
+
+    pub fn preview_and_execute_create_table_form(&mut self) -> Result<()> {
+        self.preview_create_table_form()?;
+        self.execute_editor()
+    }
+
+    pub fn preview_and_execute_structure_editor_form(&mut self) -> Result<()> {
+        self.preview_structure_editor_form()?;
+        self.execute_editor()?;
+        self.select_right_structure_tab()
+    }
+
+    pub fn structure_editor_form_selected_field_is_type(&self) -> bool {
+        self.structure_editor_form.as_ref().is_some_and(|form| {
+            form.selected_row > 0 && form.selected_focus == StructureEditorFieldFocus::ColumnType
+        })
+    }
+
+    pub fn structure_editor_form_selected_field_is_nullable(&self) -> bool {
+        self.structure_editor_form.as_ref().is_some_and(|form| {
+            form.selected_row > 0 && form.selected_focus == StructureEditorFieldFocus::Nullable
+        })
+    }
+
+    pub fn structure_editor_form_selected_field_is_unique(&self) -> bool {
+        self.structure_editor_form.as_ref().is_some_and(|form| {
+            form.selected_row > 0 && form.selected_focus == StructureEditorFieldFocus::Unique
+        })
+    }
+
+    pub fn structure_editor_form_selected_field_is_primary_key(&self) -> bool {
+        self.structure_editor_form.as_ref().is_some_and(|form| {
+            form.selected_row > 0 && form.selected_focus == StructureEditorFieldFocus::PrimaryKey
+        })
+    }
+
+    pub fn structure_editor_form_selected_field_is_toggle(&self) -> bool {
+        self.structure_editor_form.as_ref().is_some_and(|form| {
+            form.selected_row > 0
+                && matches!(
+                    form.selected_focus,
+                    StructureEditorFieldFocus::Nullable
+                        | StructureEditorFieldFocus::Unique
+                        | StructureEditorFieldFocus::PrimaryKey
+                )
+        })
+    }
+
+    pub fn insert_structure_editor_form_char(&mut self, ch: char) -> Result<()> {
+        let form = self
+            .structure_editor_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("structure editor is not open"))?;
+
+        match structure_editor_active_text_target(form) {
+            Some(target) => {
+                if *target == STRUCTURE_EDITOR_EXISTING_DEFAULT_SENTINEL {
+                    target.clear();
+                }
+                target.push(ch);
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+
+    pub fn backspace_structure_editor_form(&mut self) -> Result<()> {
+        let form = self
+            .structure_editor_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("structure editor is not open"))?;
+
+        match structure_editor_active_text_target(form) {
+            Some(target) => {
+                if *target == STRUCTURE_EDITOR_EXISTING_DEFAULT_SENTINEL {
+                    target.clear();
+                } else {
+                    target.pop();
+                }
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+
+    pub fn clear_structure_editor_form_field(&mut self) -> Result<()> {
+        let form = self
+            .structure_editor_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("structure editor is not open"))?;
+
+        match structure_editor_active_text_target(form) {
+            Some(target) => {
+                target.clear();
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+
+    pub fn alter_column_form_selected_field_is_type(&self) -> bool {
+        self.alter_column_form
+            .as_ref()
+            .is_some_and(|form| form.selected_focus == AlterColumnFieldFocus::ColumnType)
+    }
+
+    pub fn alter_column_form_selected_field_is_nullable(&self) -> bool {
+        self.alter_column_form
+            .as_ref()
+            .is_some_and(|form| form.selected_focus == AlterColumnFieldFocus::Nullable)
+    }
+
+    pub fn insert_alter_column_form_char(&mut self, ch: char) -> Result<()> {
+        let form = self
+            .alter_column_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("alter column form is not open"))?;
+        match form.selected_focus {
+            AlterColumnFieldFocus::ColumnName => form.new_name.push(ch),
+            AlterColumnFieldFocus::DefaultValue => form.default_value.push(ch),
+            AlterColumnFieldFocus::ColumnType | AlterColumnFieldFocus::Nullable => {}
+        }
+        Ok(())
+    }
+
+    pub fn backspace_alter_column_form(&mut self) -> Result<()> {
+        let form = self
+            .alter_column_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("alter column form is not open"))?;
+        match form.selected_focus {
+            AlterColumnFieldFocus::ColumnName => {
+                form.new_name.pop();
+            }
+            AlterColumnFieldFocus::DefaultValue => {
+                form.default_value.pop();
+            }
+            AlterColumnFieldFocus::ColumnType | AlterColumnFieldFocus::Nullable => {}
+        }
+        Ok(())
+    }
+
+    pub fn clear_alter_column_form_field(&mut self) -> Result<()> {
+        let form = self
+            .alter_column_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("alter column form is not open"))?;
+        match form.selected_focus {
+            AlterColumnFieldFocus::ColumnName => form.new_name.clear(),
+            AlterColumnFieldFocus::DefaultValue => form.default_value.clear(),
+            AlterColumnFieldFocus::ColumnType | AlterColumnFieldFocus::Nullable => {}
+        }
+        Ok(())
+    }
+
+    pub fn add_column_form_selected_field_is_type(&self) -> bool {
+        self.add_column_form
+            .as_ref()
+            .is_some_and(|form| form.selected_focus == AddColumnFieldFocus::ColumnType)
+    }
+
+    pub fn add_column_form_selected_field_is_nullable(&self) -> bool {
+        self.add_column_form
+            .as_ref()
+            .is_some_and(|form| form.selected_focus == AddColumnFieldFocus::Nullable)
+    }
+
+    pub fn insert_add_column_form_char(&mut self, ch: char) -> Result<()> {
+        let form = self
+            .add_column_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("add column form is not open"))?;
+        match form.selected_focus {
+            AddColumnFieldFocus::ColumnName => form.name.push(ch),
+            AddColumnFieldFocus::DefaultValue => form.default_value.push(ch),
+            AddColumnFieldFocus::ColumnType | AddColumnFieldFocus::Nullable => {}
+        }
+        Ok(())
+    }
+
+    pub fn backspace_add_column_form(&mut self) -> Result<()> {
+        let form = self
+            .add_column_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("add column form is not open"))?;
+        match form.selected_focus {
+            AddColumnFieldFocus::ColumnName => {
+                form.name.pop();
+            }
+            AddColumnFieldFocus::DefaultValue => {
+                form.default_value.pop();
+            }
+            AddColumnFieldFocus::ColumnType | AddColumnFieldFocus::Nullable => {}
+        }
+        Ok(())
+    }
+
+    pub fn clear_add_column_form_field(&mut self) -> Result<()> {
+        let form = self
+            .add_column_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("add column form is not open"))?;
+        match form.selected_focus {
+            AddColumnFieldFocus::ColumnName => form.name.clear(),
+            AddColumnFieldFocus::DefaultValue => form.default_value.clear(),
+            AddColumnFieldFocus::ColumnType | AddColumnFieldFocus::Nullable => {}
+        }
+        Ok(())
+    }
+
+    pub fn insert_rename_table_form_char(&mut self, ch: char) -> Result<()> {
+        let form = self
+            .rename_table_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("rename table form is not open"))?;
+        form.new_name.push(ch);
+        Ok(())
+    }
+
+    pub fn backspace_rename_table_form(&mut self) -> Result<()> {
+        let form = self
+            .rename_table_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("rename table form is not open"))?;
+        form.new_name.pop();
+        Ok(())
+    }
+
+    pub fn clear_rename_table_form(&mut self) -> Result<()> {
+        let form = self
+            .rename_table_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("rename table form is not open"))?;
+        form.new_name.clear();
+        Ok(())
+    }
+
+    pub fn create_index_form_unique_selected(&self) -> bool {
+        self.create_index_form.is_some()
+    }
+
+    pub fn insert_create_index_form_char(&mut self, ch: char) -> Result<()> {
+        let form = self
+            .create_index_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("create index form is not open"))?;
+        form.index_name.push(ch);
+        Ok(())
+    }
+
+    pub fn backspace_create_index_form(&mut self) -> Result<()> {
+        let form = self
+            .create_index_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("create index form is not open"))?;
+        form.index_name.pop();
+        Ok(())
+    }
+
+    pub fn clear_create_index_form(&mut self) -> Result<()> {
+        let form = self
+            .create_index_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("create index form is not open"))?;
+        form.index_name.clear();
+        Ok(())
+    }
+
+    pub fn insert_drop_index_form_char(&mut self, ch: char) -> Result<()> {
+        let form = self
+            .drop_index_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("drop index form is not open"))?;
+        form.index_name.push(ch);
+        Ok(())
+    }
+
+    pub fn backspace_drop_index_form(&mut self) -> Result<()> {
+        let form = self
+            .drop_index_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("drop index form is not open"))?;
+        form.index_name.pop();
+        Ok(())
+    }
+
+    pub fn clear_drop_index_form(&mut self) -> Result<()> {
+        let form = self
+            .drop_index_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("drop index form is not open"))?;
+        form.index_name.clear();
         Ok(())
     }
 
@@ -2831,6 +3833,1508 @@ impl WorkspaceApp {
         self.save_sql_dialog = None;
     }
 
+    fn open_create_table_form(&mut self) -> Result<()> {
+        let (connection_index, database_name, schema_name) = self.selected_schema_target()?;
+        let connection_kind = self
+            .sessions
+            .get(connection_index)
+            .map(|session| session.kind)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+
+        self.create_table_form = Some(CreateTableFormState {
+            connection_index,
+            database_name,
+            schema_name,
+            table_name: String::new(),
+            selected_row: 0,
+            selected_focus: CreateTableFieldFocus::TableName,
+            columns: vec![default_create_table_primary_column(connection_kind)],
+        });
+        Ok(())
+    }
+
+    fn close_create_table_form(&mut self) {
+        self.create_table_form = None;
+    }
+
+    fn move_create_table_form_selection(&mut self, delta: isize) {
+        let Some(form) = self.create_table_form.as_mut() else {
+            return;
+        };
+        let row_count = form.columns.len() + 1;
+        if row_count == 0 {
+            form.selected_row = 0;
+            return;
+        }
+
+        let offset = delta.unsigned_abs() % row_count;
+        form.selected_row = if delta.is_negative() {
+            (form.selected_row + row_count - offset) % row_count
+        } else {
+            (form.selected_row + offset) % row_count
+        };
+
+        if form.selected_row == 0 {
+            form.selected_focus = CreateTableFieldFocus::TableName;
+        } else if form.selected_focus == CreateTableFieldFocus::TableName {
+            form.selected_focus = CreateTableFieldFocus::ColumnName;
+        }
+    }
+
+    fn move_create_table_form_focus(&mut self, delta: isize) {
+        let Some(form) = self.create_table_form.as_mut() else {
+            return;
+        };
+        if form.selected_row == 0 {
+            if delta.is_positive() && !form.columns.is_empty() {
+                form.selected_row = 1;
+                form.selected_focus = CreateTableFieldFocus::ColumnName;
+            } else {
+                form.selected_focus = CreateTableFieldFocus::TableName;
+            }
+            return;
+        }
+        let current = if form.selected_focus == CreateTableFieldFocus::TableName {
+            CreateTableFieldFocus::ColumnName
+        } else {
+            form.selected_focus
+        };
+        let next = current.cycle(delta);
+
+        if delta.is_positive()
+            && current == CreateTableFieldFocus::PrimaryKey
+            && form.selected_row < form.columns.len()
+        {
+            form.selected_row += 1;
+            form.selected_focus = CreateTableFieldFocus::ColumnName;
+            return;
+        }
+
+        if delta.is_negative() && current == CreateTableFieldFocus::ColumnName {
+            if form.selected_row > 1 {
+                form.selected_row -= 1;
+                form.selected_focus = CreateTableFieldFocus::PrimaryKey;
+            } else {
+                form.selected_row = 0;
+                form.selected_focus = CreateTableFieldFocus::TableName;
+            }
+            return;
+        }
+
+        form.selected_focus = next;
+    }
+
+    fn cycle_create_table_form_column_type(&mut self, delta: isize) -> Result<()> {
+        let connection_index = self
+            .create_table_form
+            .as_ref()
+            .map(|form| form.connection_index)
+            .ok_or_else(|| anyhow!("create table form is not open"))?;
+        let kind = self
+            .sessions
+            .get(connection_index)
+            .map(|session| session.kind)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        let options = create_table_type_options(kind);
+        let form = self
+            .create_table_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("create table form is not open"))?;
+        let column_index = form
+            .selected_row
+            .checked_sub(1)
+            .ok_or_else(|| anyhow!("select a column row first"))?;
+        let column = form
+            .columns
+            .get_mut(column_index)
+            .ok_or_else(|| anyhow!("selected create table column is no longer available"))?;
+        let len = options.len();
+        let offset = delta.unsigned_abs() % len;
+        column.type_index = if delta.is_negative() {
+            (column.type_index + len - offset) % len
+        } else {
+            (column.type_index + offset) % len
+        };
+        Ok(())
+    }
+
+    fn toggle_create_table_form_nullable(&mut self) -> Result<()> {
+        let form = self
+            .create_table_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("create table form is not open"))?;
+        let column_index = form
+            .selected_row
+            .checked_sub(1)
+            .ok_or_else(|| anyhow!("select a column row first"))?;
+        let column = form
+            .columns
+            .get_mut(column_index)
+            .ok_or_else(|| anyhow!("selected create table column is no longer available"))?;
+        if column.primary_key {
+            column.primary_key = false;
+            column.auto_increment = false;
+            column.nullable = true;
+        } else {
+            column.nullable = !column.nullable;
+            if column.nullable {
+                column.auto_increment = false;
+            }
+        }
+        Ok(())
+    }
+
+    fn toggle_create_table_form_unique(&mut self) -> Result<()> {
+        let form = self
+            .create_table_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("create table form is not open"))?;
+        let column_index = form
+            .selected_row
+            .checked_sub(1)
+            .ok_or_else(|| anyhow!("select a column row first"))?;
+        let column = form
+            .columns
+            .get_mut(column_index)
+            .ok_or_else(|| anyhow!("selected create table column is no longer available"))?;
+        column.unique = !column.unique;
+        if column.unique {
+            column.auto_increment = false;
+        }
+        Ok(())
+    }
+
+    fn toggle_create_table_form_auto_increment(&mut self) -> Result<()> {
+        let kind = self
+            .create_table_form
+            .as_ref()
+            .and_then(|form| self.sessions.get(form.connection_index))
+            .map(|session| session.kind)
+            .unwrap_or(DatabaseKind::Postgres);
+        let form = self
+            .create_table_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("create table form is not open"))?;
+        let column_index = form
+            .selected_row
+            .checked_sub(1)
+            .ok_or_else(|| anyhow!("select a column row first"))?;
+        if column_index >= form.columns.len() {
+            return Err(anyhow!(
+                "selected create table column is no longer available"
+            ));
+        }
+
+        let enable = !form.columns[column_index].auto_increment;
+        for (index, column) in form.columns.iter_mut().enumerate() {
+            if index == column_index {
+                column.auto_increment = enable;
+                if enable {
+                    column.type_index = create_table_auto_increment_type_index(kind);
+                    column.nullable = false;
+                    column.unique = false;
+                    column.primary_key = true;
+                }
+            } else if enable {
+                column.primary_key = false;
+                column.auto_increment = false;
+            }
+        }
+        Ok(())
+    }
+
+    fn toggle_create_table_form_primary_key(&mut self) -> Result<()> {
+        let form = self
+            .create_table_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("create table form is not open"))?;
+        let column_index = form
+            .selected_row
+            .checked_sub(1)
+            .ok_or_else(|| anyhow!("select a column row first"))?;
+        if column_index >= form.columns.len() {
+            return Err(anyhow!(
+                "selected create table column is no longer available"
+            ));
+        }
+
+        let enable = !form.columns[column_index].primary_key;
+        for (index, column) in form.columns.iter_mut().enumerate() {
+            column.primary_key = enable && index == column_index;
+            if column.primary_key {
+                column.nullable = false;
+                column.unique = false;
+            } else {
+                column.auto_increment = false;
+            }
+        }
+        Ok(())
+    }
+
+    fn add_create_table_form_column(&mut self) {
+        let kind = self
+            .create_table_form
+            .as_ref()
+            .and_then(|form| self.sessions.get(form.connection_index))
+            .map(|session| session.kind)
+            .unwrap_or(DatabaseKind::Postgres);
+        let Some(form) = self.create_table_form.as_mut() else {
+            return;
+        };
+        let next_index = form.columns.len() + 1;
+        form.columns
+            .push(default_create_table_regular_column(kind, next_index));
+        form.selected_row = form.columns.len();
+        form.selected_focus = CreateTableFieldFocus::ColumnName;
+    }
+
+    fn remove_create_table_form_column(&mut self) -> Result<()> {
+        let form = self
+            .create_table_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("create table form is not open"))?;
+        let column_index = form
+            .selected_row
+            .checked_sub(1)
+            .ok_or_else(|| anyhow!("select a column row first"))?;
+        if form.columns.len() <= 1 {
+            return Err(anyhow!("a table needs at least one column"));
+        }
+        if column_index >= form.columns.len() {
+            return Err(anyhow!(
+                "selected create table column is no longer available"
+            ));
+        }
+        form.columns.remove(column_index);
+        form.selected_row = form.selected_row.min(form.columns.len());
+        if form.selected_row == 0 {
+            form.selected_focus = CreateTableFieldFocus::TableName;
+        } else {
+            form.selected_focus = CreateTableFieldFocus::ColumnName;
+        }
+        Ok(())
+    }
+
+    fn preview_create_table_form(&mut self) -> Result<()> {
+        let form = self
+            .create_table_form
+            .as_ref()
+            .ok_or_else(|| anyhow!("create table form is not open"))?;
+
+        let table_name = form.table_name.trim().to_string();
+        if table_name.is_empty() {
+            return Err(anyhow!("table name cannot be empty"));
+        }
+        if form.columns.is_empty() {
+            return Err(anyhow!(
+                "add at least one column before previewing CREATE TABLE"
+            ));
+        }
+
+        let connection_kind = self
+            .sessions
+            .get(form.connection_index)
+            .map(|session| session.kind)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        let options = create_table_type_options(connection_kind);
+        let mut seen_names = BTreeSet::new();
+        let mut columns = Vec::with_capacity(form.columns.len());
+        for column in &form.columns {
+            let name = column.name.trim();
+            if name.is_empty() {
+                return Err(anyhow!("column names cannot be empty"));
+            }
+            if !seen_names.insert(name.to_string()) {
+                return Err(anyhow!("column names must be unique"));
+            }
+            let option = options
+                .get(column.type_index)
+                .copied()
+                .unwrap_or_else(|| default_create_table_primary_type(connection_kind));
+            columns.push(CreateTableColumnTemplate {
+                name,
+                data_type: option.sql,
+                default_value: (!column.default_value.trim().is_empty())
+                    .then_some(column.default_value.trim()),
+                nullable: column.nullable,
+                unique: column.unique,
+                auto_increment: column.auto_increment,
+                primary_key: column.primary_key,
+            });
+        }
+
+        let sql = create_table_template(
+            connection_kind,
+            self.connection_capabilities(form.connection_index)?
+                .identifier_quote_style,
+            &form.schema_name,
+            &table_name,
+            &columns,
+        );
+        let connection_index = form.connection_index;
+        let database_name = form.database_name.clone();
+        let schema_name = form.schema_name.clone();
+        self.create_table_form = None;
+        let title = format!(
+            "Create Table {}.{}.{}",
+            database_name, schema_name, table_name
+        );
+        self.open_editor_tab(connection_index, Some(database_name.clone()), title, sql);
+        self.set_active_editor_post_execute_refresh_target(DbObjectRef {
+            database: database_name.clone(),
+            schema: schema_name,
+            name: table_name,
+            kind: DbObjectKind::Table,
+        });
+        if let Some(tab) = self.active_editor_tab_mut() {
+            tab.status = Some(
+                "Generated CREATE TABLE SQL. Review it, then run with Ctrl-Enter.".to_string(),
+            );
+        }
+        self.workspace_status =
+            Some("Generated CREATE TABLE SQL in the editor; run it with Ctrl-Enter.".to_string());
+        Ok(())
+    }
+
+    fn open_structure_editor(&mut self) -> Result<()> {
+        if self.active_right_tab != RightPaneTab::Structure {
+            return Err(anyhow!(
+                "open the Structure tab before editing table structure"
+            ));
+        }
+        let connection_index = self
+            .selected_connection_index()
+            .ok_or_else(|| anyhow!("no connection is selected"))?;
+        let object = self
+            .structure
+            .object
+            .clone()
+            .or_else(|| self.selected_object().cloned())
+            .ok_or_else(|| anyhow!("select a table-like object before editing structure"))?;
+        if !object.kind.supports_staged_crud() {
+            return Err(anyhow!("structure editing is only available for tables"));
+        }
+        if self.structure.columns.is_empty() {
+            return Err(anyhow!("load the table structure before editing it"));
+        }
+
+        let columns = self
+            .structure
+            .columns
+            .iter()
+            .map(|column| StructureEditorColumnState {
+                original_name: Some(column.name.clone()),
+                original_data_type: Some(column.data_type.clone()),
+                original_nullable: Some(column.nullable),
+                original_default: column
+                    .has_default
+                    .then_some(STRUCTURE_EDITOR_EXISTING_DEFAULT_SENTINEL.to_string()),
+                original_unique: Some(column.is_unique),
+                original_primary_key: Some(column.is_primary_key),
+                name: column.name.clone(),
+                data_type: column.data_type.clone(),
+                default_value: if column.has_default {
+                    STRUCTURE_EDITOR_EXISTING_DEFAULT_SENTINEL.to_string()
+                } else {
+                    String::new()
+                },
+                nullable: column.nullable,
+                unique: column.is_unique,
+                primary_key: column.is_primary_key,
+            })
+            .collect::<Vec<_>>();
+        let anchor_row = self
+            .grid_selected_row_index()
+            .saturating_add(1)
+            .clamp(1, columns.len());
+
+        self.structure_editor_form = Some(StructureEditorFormState {
+            connection_index,
+            database_name: object.database.clone(),
+            schema_name: object.schema.clone(),
+            old_table_name: object.name.clone(),
+            object_kind: object.kind,
+            table_name: object.name,
+            selected_row: 0,
+            selected_focus: StructureEditorFieldFocus::TableName,
+            anchor_row,
+            columns,
+        });
+        Ok(())
+    }
+
+    fn close_structure_editor_form(&mut self) {
+        self.structure_editor_form = None;
+    }
+
+    fn move_structure_editor_form_selection(&mut self, delta: isize) {
+        let Some(form) = self.structure_editor_form.as_mut() else {
+            return;
+        };
+        let row_count = form.columns.len() + 1;
+        if row_count == 0 {
+            form.selected_row = 0;
+            return;
+        }
+
+        if form.selected_row == 0 {
+            if delta.is_positive() && !form.columns.is_empty() {
+                form.selected_row = form.anchor_row.min(form.columns.len());
+                form.selected_focus = StructureEditorFieldFocus::ColumnName;
+            } else {
+                form.selected_focus = StructureEditorFieldFocus::TableName;
+            }
+            return;
+        }
+
+        let offset = delta.unsigned_abs() % row_count;
+        form.selected_row = if delta.is_negative() {
+            (form.selected_row + row_count - offset) % row_count
+        } else {
+            (form.selected_row + offset) % row_count
+        };
+
+        if form.selected_row == 0 {
+            form.selected_focus = StructureEditorFieldFocus::TableName;
+        } else if form.selected_focus == StructureEditorFieldFocus::TableName {
+            form.selected_focus = StructureEditorFieldFocus::ColumnName;
+        }
+    }
+
+    fn move_structure_editor_form_focus(&mut self, delta: isize) {
+        let Some(form) = self.structure_editor_form.as_mut() else {
+            return;
+        };
+        if form.selected_row == 0 {
+            if delta.is_positive() && !form.columns.is_empty() {
+                form.selected_row = form.anchor_row.min(form.columns.len());
+                form.selected_focus = StructureEditorFieldFocus::ColumnName;
+            } else {
+                form.selected_focus = StructureEditorFieldFocus::TableName;
+            }
+            return;
+        }
+
+        let current = if form.selected_focus == StructureEditorFieldFocus::TableName {
+            StructureEditorFieldFocus::ColumnName
+        } else {
+            form.selected_focus
+        };
+        let next = current.cycle(delta);
+
+        if delta.is_positive()
+            && current == StructureEditorFieldFocus::PrimaryKey
+            && form.selected_row < form.columns.len()
+        {
+            form.selected_row += 1;
+            form.selected_focus = StructureEditorFieldFocus::ColumnName;
+            return;
+        }
+
+        if delta.is_negative() && current == StructureEditorFieldFocus::ColumnName {
+            if form.selected_row > 1 {
+                form.selected_row -= 1;
+                form.selected_focus = StructureEditorFieldFocus::PrimaryKey;
+            } else {
+                form.selected_row = 0;
+                form.selected_focus = StructureEditorFieldFocus::TableName;
+            }
+            return;
+        }
+
+        form.selected_focus = next;
+    }
+
+    fn cycle_structure_editor_form_column_type(&mut self, delta: isize) -> Result<()> {
+        let connection_index = self
+            .structure_editor_form
+            .as_ref()
+            .map(|form| form.connection_index)
+            .ok_or_else(|| anyhow!("structure editor is not open"))?;
+        let kind = self
+            .sessions
+            .get(connection_index)
+            .map(|session| session.kind)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        let options = create_table_type_options(kind);
+        let form = self
+            .structure_editor_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("structure editor is not open"))?;
+        let column_index = form
+            .selected_row
+            .checked_sub(1)
+            .ok_or_else(|| anyhow!("select a column row first"))?;
+        let column = form
+            .columns
+            .get_mut(column_index)
+            .ok_or_else(|| anyhow!("selected structure column is no longer available"))?;
+        let len = options.len();
+        let current_index = options
+            .iter()
+            .position(|option| option.label.eq_ignore_ascii_case(column.data_type.trim()))
+            .unwrap_or(0);
+        let offset = delta.unsigned_abs() % len;
+        let next_index = if delta.is_negative() {
+            (current_index + len - offset) % len
+        } else {
+            (current_index + offset) % len
+        };
+        column.data_type = options[next_index].label.to_string();
+        Ok(())
+    }
+
+    fn toggle_structure_editor_form_nullable(&mut self) -> Result<()> {
+        let form = self
+            .structure_editor_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("structure editor is not open"))?;
+        let column_index = form
+            .selected_row
+            .checked_sub(1)
+            .ok_or_else(|| anyhow!("select a column row first"))?;
+        let column = form
+            .columns
+            .get_mut(column_index)
+            .ok_or_else(|| anyhow!("selected structure column is no longer available"))?;
+        column.nullable = !column.nullable;
+        if column.nullable {
+            column.primary_key = false;
+        }
+        Ok(())
+    }
+
+    fn toggle_structure_editor_form_unique(&mut self) -> Result<()> {
+        let form = self
+            .structure_editor_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("structure editor is not open"))?;
+        let column_index = form
+            .selected_row
+            .checked_sub(1)
+            .ok_or_else(|| anyhow!("select a column row first"))?;
+        let column = form
+            .columns
+            .get_mut(column_index)
+            .ok_or_else(|| anyhow!("selected structure column is no longer available"))?;
+        if column.primary_key {
+            column.unique = false;
+        } else {
+            column.unique = !column.unique;
+        }
+        Ok(())
+    }
+
+    fn toggle_structure_editor_form_primary_key(&mut self) -> Result<()> {
+        let form = self
+            .structure_editor_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("structure editor is not open"))?;
+        let column_index = form
+            .selected_row
+            .checked_sub(1)
+            .ok_or_else(|| anyhow!("select a column row first"))?;
+        if column_index >= form.columns.len() {
+            return Err(anyhow!("selected structure column is no longer available"));
+        }
+
+        let enable = !form.columns[column_index].primary_key;
+        for (index, column) in form.columns.iter_mut().enumerate() {
+            column.primary_key = enable && index == column_index;
+            if column.primary_key {
+                column.nullable = false;
+                column.unique = false;
+            }
+        }
+        Ok(())
+    }
+
+    fn add_structure_editor_form_column(&mut self) {
+        let kind = self
+            .structure_editor_form
+            .as_ref()
+            .and_then(|form| self.sessions.get(form.connection_index))
+            .map(|session| session.kind)
+            .unwrap_or(DatabaseKind::Postgres);
+        let Some(form) = self.structure_editor_form.as_mut() else {
+            return;
+        };
+        let next_index = form.columns.len() + 1;
+        form.columns
+            .push(default_structure_editor_regular_column(kind, next_index));
+        form.anchor_row = form.columns.len();
+        form.selected_row = form.columns.len();
+        form.selected_focus = StructureEditorFieldFocus::ColumnName;
+    }
+
+    fn remove_structure_editor_form_column(&mut self) -> Result<()> {
+        let form = self
+            .structure_editor_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("structure editor is not open"))?;
+        let column_index = form
+            .selected_row
+            .checked_sub(1)
+            .ok_or_else(|| anyhow!("select a column row first"))?;
+        if form.columns.len() <= 1 {
+            return Err(anyhow!("a table needs at least one column"));
+        }
+        if column_index >= form.columns.len() {
+            return Err(anyhow!("selected structure column is no longer available"));
+        }
+        form.columns.remove(column_index);
+        form.selected_row = form.selected_row.min(form.columns.len());
+        form.anchor_row = form.anchor_row.min(form.columns.len()).max(1);
+        if form.selected_row == 0 {
+            form.selected_focus = StructureEditorFieldFocus::TableName;
+        } else {
+            form.selected_focus = StructureEditorFieldFocus::ColumnName;
+        }
+        Ok(())
+    }
+
+    fn preview_structure_editor_form(&mut self) -> Result<()> {
+        let form = self
+            .structure_editor_form
+            .as_ref()
+            .ok_or_else(|| anyhow!("structure editor is not open"))?;
+        let table_name = form.table_name.trim().to_string();
+        if table_name.is_empty() {
+            return Err(anyhow!("table name cannot be empty"));
+        }
+        if form.columns.is_empty() {
+            return Err(anyhow!("a table needs at least one column"));
+        }
+
+        let kind = self
+            .sessions
+            .get(form.connection_index)
+            .map(|session| session.kind)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        let quote_style = self
+            .connection_capabilities(form.connection_index)?
+            .identifier_quote_style;
+
+        let mut seen_names = BTreeSet::new();
+        for column in &form.columns {
+            let name = column.name.trim();
+            if name.is_empty() {
+                return Err(anyhow!("column names cannot be empty"));
+            }
+            if !seen_names.insert(name.to_string()) {
+                return Err(anyhow!("column names must be unique"));
+            }
+        }
+
+        let mut statements = Vec::new();
+        let target_table_name = table_name.as_str();
+        let original_primary_key = form
+            .columns
+            .iter()
+            .find(|column| column.original_primary_key.unwrap_or(false));
+        let current_primary_key = form.columns.iter().find(|column| column.primary_key);
+        let original_primary_identity =
+            original_primary_key.and_then(structure_editor_column_identity);
+        let current_primary_identity =
+            current_primary_key.and_then(structure_editor_column_identity);
+
+        let original_unique_identities = form
+            .columns
+            .iter()
+            .filter(|column| column.original_unique.unwrap_or(false))
+            .filter_map(structure_editor_column_identity)
+            .collect::<BTreeSet<_>>();
+        let current_unique_identities = form
+            .columns
+            .iter()
+            .filter(|column| column.unique && !column.primary_key)
+            .filter_map(structure_editor_column_identity)
+            .collect::<BTreeSet<_>>();
+
+        if original_primary_identity != current_primary_identity && original_primary_key.is_some() {
+            statements.push(drop_primary_key_template(
+                kind,
+                quote_style,
+                &form.schema_name,
+                &form.old_table_name,
+            ));
+        }
+
+        for column in form.columns.iter().filter(|column| {
+            column.original_unique.unwrap_or(false)
+                && structure_editor_column_identity(column)
+                    .is_some_and(|identity| !current_unique_identities.contains(&identity))
+        }) {
+            let old_name = column
+                .original_name
+                .as_deref()
+                .unwrap_or(column.name.trim());
+            statements.push(drop_unique_constraint_template(
+                kind,
+                quote_style,
+                &form.schema_name,
+                &form.old_table_name,
+                old_name,
+            ));
+        }
+
+        let retained_original_names = form
+            .columns
+            .iter()
+            .filter_map(|column| column.original_name.as_deref())
+            .collect::<BTreeSet<_>>();
+
+        for column in &form.columns {
+            let Some(old_name) = column.original_name.as_deref() else {
+                continue;
+            };
+            let name = column.name.trim();
+            let data_type = column.data_type.trim();
+            let new_default = structure_editor_default_as_option(&column.default_value);
+            let sql = alter_column_template(
+                kind,
+                quote_style,
+                &form.schema_name,
+                target_table_name,
+                AlterColumnTemplate {
+                    old_name,
+                    new_name: name,
+                    old_data_type: column.original_data_type.as_deref().unwrap_or(data_type),
+                    new_data_type: data_type,
+                    old_nullable: column.original_nullable.unwrap_or(column.nullable),
+                    new_nullable: column.nullable,
+                    old_default: column.original_default.as_deref(),
+                    new_default,
+                },
+            );
+            if !sql.trim_start().starts_with("-- No structural changes") {
+                statements.push(sql);
+            }
+        }
+
+        for original_name in self
+            .structure
+            .columns
+            .iter()
+            .map(|column| column.name.as_str())
+            .filter(|name| !retained_original_names.contains(name))
+        {
+            statements.push(drop_column_template(
+                kind,
+                quote_style,
+                &form.schema_name,
+                target_table_name,
+                original_name,
+            ));
+        }
+
+        for column in form
+            .columns
+            .iter()
+            .filter(|column| column.original_name.is_none())
+        {
+            let name = column.name.trim();
+            let data_type = column.data_type.trim();
+            let new_default = structure_editor_default_as_option(&column.default_value);
+            statements.push(add_column_template(
+                kind,
+                quote_style,
+                &form.schema_name,
+                target_table_name,
+                AddColumnTemplate {
+                    name,
+                    data_type,
+                    nullable: column.nullable,
+                    default_value: new_default,
+                },
+            ));
+        }
+
+        if table_name != form.old_table_name {
+            statements.push(rename_table_template(
+                kind,
+                quote_style,
+                &form.schema_name,
+                RenameTableTemplate {
+                    old_name: &form.old_table_name,
+                    new_name: &table_name,
+                },
+            ));
+        }
+
+        for column in form.columns.iter().filter(|column| {
+            column.unique
+                && !column.primary_key
+                && structure_editor_column_identity(column)
+                    .is_some_and(|identity| !original_unique_identities.contains(&identity))
+        }) {
+            statements.push(add_unique_constraint_template(
+                kind,
+                quote_style,
+                &form.schema_name,
+                target_table_name,
+                column.name.trim(),
+            ));
+        }
+
+        if original_primary_identity != current_primary_identity {
+            if let Some(column) = current_primary_key {
+                statements.push(add_primary_key_template(
+                    kind,
+                    quote_style,
+                    &form.schema_name,
+                    target_table_name,
+                    column.name.trim(),
+                ));
+            }
+        }
+
+        let sql = if statements.is_empty() {
+            format!(
+                "-- No structural changes for {}.{}.",
+                form.schema_name, table_name
+            )
+        } else {
+            statements.join("\n")
+        };
+        let connection_index = form.connection_index;
+        let database_name = form.database_name.clone();
+        let schema_name = form.schema_name.clone();
+        let old_table_name = form.old_table_name.clone();
+        let object_kind = form.object_kind;
+        self.structure_editor_form = None;
+        let title = format!("Edit Table {database_name}.{schema_name}.{old_table_name}");
+        self.open_editor_tab(connection_index, Some(database_name.clone()), title, sql);
+        self.set_active_editor_post_execute_refresh_target(DbObjectRef {
+            database: database_name,
+            schema: schema_name,
+            name: table_name,
+            kind: object_kind,
+        });
+        if let Some(tab) = self.active_editor_tab_mut() {
+            tab.status =
+                Some("Generated ALTER TABLE SQL. Review it, then run with Ctrl-Enter.".to_string());
+        }
+        self.workspace_status =
+            Some("Generated ALTER TABLE SQL in the editor; run it with Ctrl-Enter.".to_string());
+        Ok(())
+    }
+
+    fn open_alter_column_form(&mut self) -> Result<()> {
+        if self.active_right_tab != RightPaneTab::Structure {
+            return Err(anyhow!(
+                "open the Structure tab before editing table structure"
+            ));
+        }
+        let connection_index = self
+            .selected_connection_index()
+            .ok_or_else(|| anyhow!("no connection is selected"))?;
+        let object = self
+            .structure
+            .object
+            .clone()
+            .or_else(|| self.selected_object().cloned())
+            .ok_or_else(|| anyhow!("select a table-like object before editing structure"))?;
+        if !object.kind.supports_staged_crud() {
+            return Err(anyhow!("structure editing is only available for tables"));
+        }
+        let column_index = self.grid_selected_row_index();
+        let column = self
+            .structure
+            .columns
+            .get(column_index)
+            .cloned()
+            .ok_or_else(|| anyhow!("selected structure column is no longer available"))?;
+        let kind = self
+            .sessions
+            .get(connection_index)
+            .map(|session| session.kind)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+
+        self.alter_column_form = Some(AlterColumnFormState {
+            connection_index,
+            database_name: object.database,
+            schema_name: object.schema,
+            table_name: object.name,
+            old_name: column.name.clone(),
+            new_name: column.name,
+            old_data_type: column.data_type.clone(),
+            type_index: create_table_type_index(kind, &column.data_type),
+            old_nullable: column.nullable,
+            nullable: column.nullable,
+            default_value: String::new(),
+            selected_focus: AlterColumnFieldFocus::ColumnName,
+        });
+        Ok(())
+    }
+
+    fn close_alter_column_form(&mut self) {
+        self.alter_column_form = None;
+    }
+
+    fn move_alter_column_form_focus(&mut self, delta: isize) {
+        let Some(form) = self.alter_column_form.as_mut() else {
+            return;
+        };
+        form.selected_focus = form.selected_focus.cycle(delta);
+    }
+
+    fn cycle_alter_column_form_type(&mut self, delta: isize) -> Result<()> {
+        let connection_index = self
+            .alter_column_form
+            .as_ref()
+            .map(|form| form.connection_index)
+            .ok_or_else(|| anyhow!("alter column form is not open"))?;
+        let kind = self
+            .sessions
+            .get(connection_index)
+            .map(|session| session.kind)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        let options = create_table_type_options(kind);
+        let form = self
+            .alter_column_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("alter column form is not open"))?;
+        let len = options.len();
+        let offset = delta.unsigned_abs() % len;
+        form.type_index = if delta.is_negative() {
+            (form.type_index + len - offset) % len
+        } else {
+            (form.type_index + offset) % len
+        };
+        Ok(())
+    }
+
+    fn toggle_alter_column_form_nullable(&mut self) -> Result<()> {
+        let form = self
+            .alter_column_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("alter column form is not open"))?;
+        form.nullable = !form.nullable;
+        Ok(())
+    }
+
+    fn preview_alter_column_form(&mut self) -> Result<()> {
+        let form = self
+            .alter_column_form
+            .as_ref()
+            .ok_or_else(|| anyhow!("alter column form is not open"))?;
+        let new_name = form.new_name.trim().to_string();
+        if new_name.is_empty() {
+            return Err(anyhow!("column name cannot be empty"));
+        }
+        let kind = self
+            .sessions
+            .get(form.connection_index)
+            .map(|session| session.kind)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        let options = create_table_type_options(kind);
+        let new_type = options
+            .get(form.type_index)
+            .map(|option| option.sql)
+            .unwrap_or_else(|| default_create_table_primary_type(kind).sql);
+        let sql = alter_column_template(
+            kind,
+            self.connection_capabilities(form.connection_index)?
+                .identifier_quote_style,
+            &form.schema_name,
+            &form.table_name,
+            AlterColumnTemplate {
+                old_name: &form.old_name,
+                new_name: &new_name,
+                old_data_type: &form.old_data_type,
+                new_data_type: new_type,
+                old_nullable: form.old_nullable,
+                new_nullable: form.nullable,
+                old_default: None,
+                new_default: (!form.default_value.trim().is_empty())
+                    .then_some(form.default_value.trim()),
+            },
+        );
+        let connection_index = form.connection_index;
+        let database_name = form.database_name.clone();
+        let schema_name = form.schema_name.clone();
+        let table_name = form.table_name.clone();
+        self.alter_column_form = None;
+        let title = format!("Alter Column {database_name}.{schema_name}.{table_name}.{new_name}");
+        self.open_editor_tab(connection_index, Some(database_name.clone()), title, sql);
+        self.set_active_editor_post_execute_refresh_target(DbObjectRef {
+            database: database_name,
+            schema: schema_name,
+            name: table_name,
+            kind: DbObjectKind::Table,
+        });
+        if let Some(tab) = self.active_editor_tab_mut() {
+            tab.status =
+                Some("Generated ALTER TABLE SQL. Review it, then run with Ctrl-Enter.".to_string());
+        }
+        self.workspace_status =
+            Some("Generated ALTER TABLE SQL in the editor; run it with Ctrl-Enter.".to_string());
+        Ok(())
+    }
+
+    fn open_add_column_form(&mut self) -> Result<()> {
+        if self.active_right_tab != RightPaneTab::Structure {
+            return Err(anyhow!(
+                "open the Structure tab before editing table structure"
+            ));
+        }
+        let connection_index = self
+            .selected_connection_index()
+            .ok_or_else(|| anyhow!("no connection is selected"))?;
+        let object = self
+            .structure
+            .object
+            .clone()
+            .or_else(|| self.selected_object().cloned())
+            .ok_or_else(|| anyhow!("select a table-like object before editing structure"))?;
+        if !object.kind.supports_staged_crud() {
+            return Err(anyhow!("structure editing is only available for tables"));
+        }
+        let kind = self
+            .sessions
+            .get(connection_index)
+            .map(|session| session.kind)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        self.add_column_form = Some(AddColumnFormState {
+            connection_index,
+            database_name: object.database,
+            schema_name: object.schema,
+            table_name: object.name,
+            name: String::new(),
+            type_index: create_table_type_index(kind, "integer"),
+            nullable: true,
+            default_value: String::new(),
+            selected_focus: AddColumnFieldFocus::ColumnName,
+        });
+        Ok(())
+    }
+
+    fn close_add_column_form(&mut self) {
+        self.add_column_form = None;
+    }
+
+    fn move_add_column_form_focus(&mut self, delta: isize) {
+        let Some(form) = self.add_column_form.as_mut() else {
+            return;
+        };
+        form.selected_focus = form.selected_focus.cycle(delta);
+    }
+
+    fn cycle_add_column_form_type(&mut self, delta: isize) -> Result<()> {
+        let connection_index = self
+            .add_column_form
+            .as_ref()
+            .map(|form| form.connection_index)
+            .ok_or_else(|| anyhow!("add column form is not open"))?;
+        let kind = self
+            .sessions
+            .get(connection_index)
+            .map(|session| session.kind)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        let options = create_table_type_options(kind);
+        let form = self
+            .add_column_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("add column form is not open"))?;
+        let len = options.len();
+        let offset = delta.unsigned_abs() % len;
+        form.type_index = if delta.is_negative() {
+            (form.type_index + len - offset) % len
+        } else {
+            (form.type_index + offset) % len
+        };
+        Ok(())
+    }
+
+    fn toggle_add_column_form_nullable(&mut self) -> Result<()> {
+        let form = self
+            .add_column_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("add column form is not open"))?;
+        form.nullable = !form.nullable;
+        Ok(())
+    }
+
+    fn preview_add_column_form(&mut self) -> Result<()> {
+        let form = self
+            .add_column_form
+            .as_ref()
+            .ok_or_else(|| anyhow!("add column form is not open"))?;
+        let name = form.name.trim().to_string();
+        if name.is_empty() {
+            return Err(anyhow!("column name cannot be empty"));
+        }
+        let kind = self
+            .sessions
+            .get(form.connection_index)
+            .map(|session| session.kind)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        let options = create_table_type_options(kind);
+        let data_type = options
+            .get(form.type_index)
+            .map(|option| option.sql)
+            .unwrap_or_else(|| default_create_table_primary_type(kind).sql);
+        let sql = add_column_template(
+            kind,
+            self.connection_capabilities(form.connection_index)?
+                .identifier_quote_style,
+            &form.schema_name,
+            &form.table_name,
+            AddColumnTemplate {
+                name: &name,
+                data_type,
+                nullable: form.nullable,
+                default_value: (!form.default_value.trim().is_empty())
+                    .then_some(form.default_value.trim()),
+            },
+        );
+        let connection_index = form.connection_index;
+        let database_name = form.database_name.clone();
+        let schema_name = form.schema_name.clone();
+        let table_name = form.table_name.clone();
+        self.add_column_form = None;
+        let title = format!("Add Column {database_name}.{schema_name}.{table_name}.{name}");
+        self.open_editor_tab(connection_index, Some(database_name.clone()), title, sql);
+        self.set_active_editor_post_execute_refresh_target(DbObjectRef {
+            database: database_name,
+            schema: schema_name,
+            name: table_name,
+            kind: DbObjectKind::Table,
+        });
+        if let Some(tab) = self.active_editor_tab_mut() {
+            tab.status =
+                Some("Generated ALTER TABLE SQL. Review it, then run with Ctrl-Enter.".to_string());
+        }
+        self.workspace_status =
+            Some("Generated ALTER TABLE SQL in the editor; run it with Ctrl-Enter.".to_string());
+        Ok(())
+    }
+
+    fn open_rename_table_form(&mut self) -> Result<()> {
+        if self.active_right_tab != RightPaneTab::Structure {
+            return Err(anyhow!(
+                "open the Structure tab before editing table structure"
+            ));
+        }
+        let connection_index = self
+            .selected_connection_index()
+            .ok_or_else(|| anyhow!("no connection is selected"))?;
+        let object = self
+            .structure
+            .object
+            .clone()
+            .or_else(|| self.selected_object().cloned())
+            .ok_or_else(|| anyhow!("select a table-like object before editing structure"))?;
+        if !object.kind.supports_staged_crud() {
+            return Err(anyhow!("structure editing is only available for tables"));
+        }
+
+        self.rename_table_form = Some(RenameTableFormState {
+            connection_index,
+            database_name: object.database,
+            schema_name: object.schema,
+            old_name: object.name,
+            new_name: String::new(),
+        });
+        Ok(())
+    }
+
+    fn close_rename_table_form(&mut self) {
+        self.rename_table_form = None;
+    }
+
+    fn preview_rename_table_form(&mut self) -> Result<()> {
+        let form = self
+            .rename_table_form
+            .as_ref()
+            .ok_or_else(|| anyhow!("rename table form is not open"))?;
+        let new_name = form.new_name.trim().to_string();
+        if new_name.is_empty() {
+            return Err(anyhow!("table name cannot be empty"));
+        }
+        let kind = self
+            .sessions
+            .get(form.connection_index)
+            .map(|session| session.kind)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        let sql = rename_table_template(
+            kind,
+            self.connection_capabilities(form.connection_index)?
+                .identifier_quote_style,
+            &form.schema_name,
+            RenameTableTemplate {
+                old_name: &form.old_name,
+                new_name: &new_name,
+            },
+        );
+        let connection_index = form.connection_index;
+        let database_name = form.database_name.clone();
+        let schema_name = form.schema_name.clone();
+        let old_name = form.old_name.clone();
+        self.rename_table_form = None;
+        let title = format!("Rename Table {database_name}.{schema_name}.{old_name}");
+        self.open_editor_tab(connection_index, Some(database_name.clone()), title, sql);
+        self.set_active_editor_post_execute_refresh_target(DbObjectRef {
+            database: database_name,
+            schema: schema_name,
+            name: new_name,
+            kind: DbObjectKind::Table,
+        });
+        if let Some(tab) = self.active_editor_tab_mut() {
+            tab.status =
+                Some("Generated ALTER TABLE SQL. Review it, then run with Ctrl-Enter.".to_string());
+        }
+        self.workspace_status =
+            Some("Generated ALTER TABLE SQL in the editor; run it with Ctrl-Enter.".to_string());
+        Ok(())
+    }
+
+    fn prompt_drop_structure_column(&mut self) -> Result<()> {
+        if self.active_right_tab != RightPaneTab::Structure {
+            return Err(anyhow!(
+                "open the Structure tab before editing table structure"
+            ));
+        }
+        let connection_index = self
+            .selected_connection_index()
+            .ok_or_else(|| anyhow!("no connection is selected"))?;
+        let object = self
+            .structure
+            .object
+            .clone()
+            .or_else(|| self.selected_object().cloned())
+            .ok_or_else(|| anyhow!("select a table-like object before editing structure"))?;
+        if !object.kind.supports_staged_crud() {
+            return Err(anyhow!("structure editing is only available for tables"));
+        }
+        let column = self
+            .structure
+            .columns
+            .get(self.grid_selected_row_index())
+            .cloned()
+            .ok_or_else(|| anyhow!("selected structure column is no longer available"))?;
+        let kind = self
+            .sessions
+            .get(connection_index)
+            .map(|session| session.kind)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        let sql = drop_column_template(
+            kind,
+            self.connection_capabilities(connection_index)?
+                .identifier_quote_style,
+            &object.schema,
+            &object.name,
+            &column.name,
+        );
+        self.delete_confirmation = Some(DeleteConfirmationState {
+            title: format!("Drop Column {}", column.name),
+            message: format!(
+                "Preview dropping {} from {} before you run it.",
+                column.name,
+                object.database_qualified_name()
+            ),
+            sql_preview: sql.clone(),
+            warning: "This is a structural change. Review the generated SQL carefully.".to_string(),
+            help: "Press y to open the DROP COLUMN SQL in the editor, n or Esc to cancel."
+                .to_string(),
+            operation: PendingDeleteOperation::PreviewInEditor {
+                connection_index,
+                database_name: object.database.clone(),
+                title: format!(
+                    "Drop Column {}.{}.{}",
+                    object.database, object.schema, column.name
+                ),
+                sql,
+                status: Some(
+                    "Generated DROP COLUMN SQL in the editor; run it with Ctrl-Enter.".to_string(),
+                ),
+                refresh_target: Some(object),
+            },
+        });
+        Ok(())
+    }
+
+    fn open_create_index_form(&mut self) -> Result<()> {
+        if self.active_right_tab != RightPaneTab::Structure {
+            return Err(anyhow!(
+                "open the Structure tab before editing table structure"
+            ));
+        }
+        let connection_index = self
+            .selected_connection_index()
+            .ok_or_else(|| anyhow!("no connection is selected"))?;
+        let object = self
+            .structure
+            .object
+            .clone()
+            .or_else(|| self.selected_object().cloned())
+            .ok_or_else(|| anyhow!("select a table-like object before editing structure"))?;
+        if !object.kind.supports_staged_crud() {
+            return Err(anyhow!("index editing is only available for tables"));
+        }
+        let column = self
+            .structure
+            .columns
+            .get(self.grid_selected_row_index())
+            .cloned()
+            .ok_or_else(|| anyhow!("selected structure column is no longer available"))?;
+        self.create_index_form = Some(CreateIndexFormState {
+            connection_index,
+            database_name: object.database,
+            schema_name: object.schema,
+            table_name: object.name.clone(),
+            column_name: column.name.clone(),
+            index_name: default_index_name(&object.name, &column.name),
+            unique: false,
+        });
+        Ok(())
+    }
+
+    fn close_create_index_form(&mut self) {
+        self.create_index_form = None;
+    }
+
+    fn toggle_create_index_form_unique(&mut self) -> Result<()> {
+        let form = self
+            .create_index_form
+            .as_mut()
+            .ok_or_else(|| anyhow!("create index form is not open"))?;
+        form.unique = !form.unique;
+        Ok(())
+    }
+
+    fn preview_create_index_form(&mut self) -> Result<()> {
+        let form = self
+            .create_index_form
+            .as_ref()
+            .ok_or_else(|| anyhow!("create index form is not open"))?;
+        let index_name = form.index_name.trim().to_string();
+        if index_name.is_empty() {
+            return Err(anyhow!("index name cannot be empty"));
+        }
+        let kind = self
+            .sessions
+            .get(form.connection_index)
+            .map(|session| session.kind)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        let sql = create_index_template(
+            kind,
+            self.connection_capabilities(form.connection_index)?
+                .identifier_quote_style,
+            &form.schema_name,
+            &form.table_name,
+            CreateIndexTemplate {
+                index_name: &index_name,
+                column_name: &form.column_name,
+                unique: form.unique,
+            },
+        );
+        let connection_index = form.connection_index;
+        let database_name = form.database_name.clone();
+        let schema_name = form.schema_name.clone();
+        let table_name = form.table_name.clone();
+        self.create_index_form = None;
+        let title = format!("Create Index {database_name}.{schema_name}.{table_name}");
+        self.open_editor_tab(connection_index, Some(database_name.clone()), title, sql);
+        self.set_active_editor_post_execute_refresh_target(DbObjectRef {
+            database: database_name,
+            schema: schema_name,
+            name: table_name,
+            kind: DbObjectKind::Table,
+        });
+        if let Some(tab) = self.active_editor_tab_mut() {
+            tab.status = Some(
+                "Generated CREATE INDEX SQL. Review it, then run with Ctrl-Enter.".to_string(),
+            );
+        }
+        self.workspace_status =
+            Some("Generated CREATE INDEX SQL in the editor; run it with Ctrl-Enter.".to_string());
+        Ok(())
+    }
+
+    fn open_drop_index_form(&mut self) -> Result<()> {
+        if self.active_right_tab != RightPaneTab::Structure {
+            return Err(anyhow!(
+                "open the Structure tab before editing table structure"
+            ));
+        }
+        let connection_index = self
+            .selected_connection_index()
+            .ok_or_else(|| anyhow!("no connection is selected"))?;
+        let object = self
+            .structure
+            .object
+            .clone()
+            .or_else(|| self.selected_object().cloned())
+            .ok_or_else(|| anyhow!("select a table-like object before editing structure"))?;
+        if !object.kind.supports_staged_crud() {
+            return Err(anyhow!("index editing is only available for tables"));
+        }
+        let column = self
+            .structure
+            .columns
+            .get(self.grid_selected_row_index())
+            .cloned()
+            .ok_or_else(|| anyhow!("selected structure column is no longer available"))?;
+        self.drop_index_form = Some(DropIndexFormState {
+            connection_index,
+            database_name: object.database,
+            schema_name: object.schema,
+            table_name: object.name.clone(),
+            index_name: default_index_name(&object.name, &column.name),
+        });
+        Ok(())
+    }
+
+    fn close_drop_index_form(&mut self) {
+        self.drop_index_form = None;
+    }
+
+    fn preview_drop_index_form(&mut self) -> Result<()> {
+        let form = self
+            .drop_index_form
+            .as_ref()
+            .ok_or_else(|| anyhow!("drop index form is not open"))?;
+        let index_name = form.index_name.trim().to_string();
+        if index_name.is_empty() {
+            return Err(anyhow!("index name cannot be empty"));
+        }
+        let kind = self
+            .sessions
+            .get(form.connection_index)
+            .map(|session| session.kind)
+            .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
+        let sql = drop_index_template(
+            kind,
+            self.connection_capabilities(form.connection_index)?
+                .identifier_quote_style,
+            &form.schema_name,
+            &form.table_name,
+            &index_name,
+        );
+        let connection_index = form.connection_index;
+        let database_name = form.database_name.clone();
+        let schema_name = form.schema_name.clone();
+        let table_name = form.table_name.clone();
+        self.drop_index_form = None;
+        let title = format!("Drop Index {database_name}.{schema_name}.{table_name}");
+        self.open_editor_tab(connection_index, Some(database_name.clone()), title, sql);
+        self.set_active_editor_post_execute_refresh_target(DbObjectRef {
+            database: database_name,
+            schema: schema_name,
+            name: table_name,
+            kind: DbObjectKind::Table,
+        });
+        if let Some(tab) = self.active_editor_tab_mut() {
+            tab.status =
+                Some("Generated DROP INDEX SQL. Review it, then run with Ctrl-Enter.".to_string());
+        }
+        self.workspace_status =
+            Some("Generated DROP INDEX SQL in the editor; run it with Ctrl-Enter.".to_string());
+        Ok(())
+    }
+
     fn open_insert_row_form(&mut self) -> Result<()> {
         let (connection_index, object) = self.selected_table_target()?;
         let using_loaded_structure = self
@@ -3024,7 +5528,7 @@ impl WorkspaceApp {
             warning: "Only the saved query entry is removed. The current editor tab stays open."
                 .to_string(),
             help: "Press y to delete, n or Esc to cancel.".to_string(),
-            operation: PendingDeleteOperation::DeleteSavedSql {
+            operation: PendingDeleteOperation::DeleteSavedQuery {
                 name: name.clone(),
                 tab_id: tab.id,
             },
@@ -3237,6 +5741,7 @@ impl WorkspaceApp {
             connection_index,
             sql,
             Some("Committing staged CRUD..."),
+            None,
         )
     }
 
@@ -3342,6 +5847,146 @@ impl WorkspaceApp {
     fn save_sql_dialog_view(&self) -> Option<SaveSqlDialogView<'_>> {
         let dialog = self.save_sql_dialog.as_ref()?;
         Some(SaveSqlDialogView { name: &dialog.name })
+    }
+
+    pub fn create_table_form_snapshot(&self) -> Option<CreateTableFormSnapshot> {
+        let form = self.create_table_form.as_ref()?;
+        let options = create_table_type_options(
+            self.sessions
+                .get(form.connection_index)
+                .map(|session| session.kind)
+                .unwrap_or(DatabaseKind::Postgres),
+        );
+        Some(CreateTableFormSnapshot {
+            database_name: form.database_name.clone(),
+            schema_name: form.schema_name.clone(),
+            table_name: form.table_name.clone(),
+            selected_row: form.selected_row,
+            selected_focus: form.selected_focus.into_view(),
+            columns: form
+                .columns
+                .iter()
+                .map(|column| CreateTableColumnSnapshot {
+                    name: column.name.clone(),
+                    type_label: options
+                        .get(column.type_index)
+                        .map(|option| option.label.to_string())
+                        .unwrap_or_else(|| options[0].label.to_string()),
+                    default_value: (!column.default_value.trim().is_empty())
+                        .then_some(column.default_value.clone()),
+                    nullable: column.nullable,
+                    unique: column.unique,
+                    auto_increment: column.auto_increment,
+                    primary_key: column.primary_key,
+                })
+                .collect(),
+        })
+    }
+
+    pub fn structure_editor_form_snapshot(&self) -> Option<StructureEditorFormSnapshot> {
+        let form = self.structure_editor_form.as_ref()?;
+        Some(StructureEditorFormSnapshot {
+            database_name: form.database_name.clone(),
+            schema_name: form.schema_name.clone(),
+            old_table_name: form.old_table_name.clone(),
+            table_name: form.table_name.clone(),
+            selected_row: form.selected_row,
+            selected_focus: form.selected_focus.into_view(),
+            columns: form
+                .columns
+                .iter()
+                .map(|column| StructureEditorColumnSnapshot {
+                    name: column.name.clone(),
+                    type_label: column.data_type.clone(),
+                    default_value: structure_editor_default_display_value(&column.default_value),
+                    nullable: column.nullable,
+                    unique: column.unique,
+                    primary_key: column.primary_key,
+                    existing: column.original_name.is_some(),
+                })
+                .collect(),
+        })
+    }
+
+    pub fn alter_column_form_snapshot(&self) -> Option<AlterColumnFormSnapshot> {
+        let form = self.alter_column_form.as_ref()?;
+        let options = create_table_type_options(
+            self.sessions
+                .get(form.connection_index)
+                .map(|session| session.kind)
+                .unwrap_or(DatabaseKind::Postgres),
+        );
+        Some(AlterColumnFormSnapshot {
+            database_name: form.database_name.clone(),
+            schema_name: form.schema_name.clone(),
+            table_name: form.table_name.clone(),
+            old_name: form.old_name.clone(),
+            new_name: form.new_name.clone(),
+            type_label: options
+                .get(form.type_index)
+                .map(|option| option.label.to_string())
+                .unwrap_or_else(|| options[0].label.to_string()),
+            default_value: (!form.default_value.trim().is_empty())
+                .then_some(form.default_value.clone()),
+            nullable: form.nullable,
+            selected_focus: form.selected_focus.into_view(),
+        })
+    }
+
+    pub fn add_column_form_snapshot(&self) -> Option<AddColumnFormSnapshot> {
+        let form = self.add_column_form.as_ref()?;
+        let options = create_table_type_options(
+            self.sessions
+                .get(form.connection_index)
+                .map(|session| session.kind)
+                .unwrap_or(DatabaseKind::Postgres),
+        );
+        Some(AddColumnFormSnapshot {
+            database_name: form.database_name.clone(),
+            schema_name: form.schema_name.clone(),
+            table_name: form.table_name.clone(),
+            name: form.name.clone(),
+            type_label: options
+                .get(form.type_index)
+                .map(|option| option.label.to_string())
+                .unwrap_or_else(|| options[0].label.to_string()),
+            nullable: form.nullable,
+            default_value: (!form.default_value.trim().is_empty())
+                .then_some(form.default_value.clone()),
+            selected_focus: form.selected_focus.into_view(),
+        })
+    }
+
+    pub fn rename_table_form_snapshot(&self) -> Option<RenameTableFormSnapshot> {
+        let form = self.rename_table_form.as_ref()?;
+        Some(RenameTableFormSnapshot {
+            database_name: form.database_name.clone(),
+            schema_name: form.schema_name.clone(),
+            old_name: form.old_name.clone(),
+            new_name: form.new_name.clone(),
+        })
+    }
+
+    pub fn create_index_form_snapshot(&self) -> Option<CreateIndexFormSnapshot> {
+        let form = self.create_index_form.as_ref()?;
+        Some(CreateIndexFormSnapshot {
+            database_name: form.database_name.clone(),
+            schema_name: form.schema_name.clone(),
+            table_name: form.table_name.clone(),
+            column_name: form.column_name.clone(),
+            index_name: form.index_name.clone(),
+            unique: form.unique,
+        })
+    }
+
+    pub fn drop_index_form_snapshot(&self) -> Option<DropIndexFormSnapshot> {
+        let form = self.drop_index_form.as_ref()?;
+        Some(DropIndexFormSnapshot {
+            database_name: form.database_name.clone(),
+            schema_name: form.schema_name.clone(),
+            table_name: form.table_name.clone(),
+            index_name: form.index_name.clone(),
+        })
     }
 
     pub fn insert_row_form_snapshot(&self) -> Option<InsertRowFormSnapshot> {
@@ -3669,11 +6314,15 @@ impl WorkspaceApp {
     }
 
     fn execute_editor(&mut self) -> Result<()> {
-        let (connection_index, sql) = {
+        let (connection_index, sql, refresh_target) = {
             let tab = self
                 .active_editor_tab()
                 .ok_or_else(|| anyhow!("sql editor is not open"))?;
-            (tab.connection_index, tab.buffer.current_statement())
+            (
+                tab.connection_index,
+                tab.buffer.current_statement(),
+                tab.post_execute_refresh_target.clone(),
+            )
         };
         if sql.trim().is_empty() {
             return Err(anyhow!("current SQL statement is empty"));
@@ -3682,6 +6331,7 @@ impl WorkspaceApp {
             connection_index,
             sql,
             Some("Executing current SQL statement..."),
+            refresh_target,
         )
     }
 
@@ -3705,7 +6355,7 @@ impl WorkspaceApp {
         } else {
             "Running EXPLAIN..."
         };
-        self.execute_sql_with_delete_confirmation(connection_index, sql, Some(status))
+        self.execute_sql_with_delete_confirmation(connection_index, sql, Some(status), None)
     }
 
     fn execute_sql_with_delete_confirmation(
@@ -3713,6 +6363,7 @@ impl WorkspaceApp {
         connection_index: usize,
         sql: String,
         status: Option<&str>,
+        refresh_target: Option<DbObjectRef>,
     ) -> Result<()> {
         if let Some(kind) = self.read_only_write_operation(connection_index, &sql)? {
             self.report_blocked_read_only_operation(connection_index, kind);
@@ -3720,11 +6371,17 @@ impl WorkspaceApp {
         }
 
         if let Some(kind) = delete_operation_kind(&sql) {
-            self.prompt_delete_operation(connection_index, sql, status.map(str::to_string), kind)?;
+            self.prompt_delete_operation(
+                connection_index,
+                sql,
+                status.map(str::to_string),
+                kind,
+                refresh_target,
+            )?;
             return Ok(());
         }
 
-        self.execute_sql_on_connection(connection_index, sql, status)
+        self.execute_sql_on_connection(connection_index, sql, status, refresh_target)
     }
 
     fn read_only_write_operation(
@@ -3773,6 +6430,7 @@ impl WorkspaceApp {
         sql: String,
         status: Option<String>,
         kind: DeleteOperationKind,
+        refresh_target: Option<DbObjectRef>,
     ) -> Result<()> {
         let connection_name = self
             .sessions
@@ -3787,10 +6445,11 @@ impl WorkspaceApp {
             warning: "Relora will send this statement to the database only after confirmation."
                 .to_string(),
             help: "Press y to execute, n or Esc to cancel.".to_string(),
-            operation: PendingDeleteOperation::ExecuteSql {
+            operation: PendingDeleteOperation::ExecuteStatement {
                 connection_index,
                 sql,
                 status,
+                refresh_target,
             },
         });
         self.workspace_status = Some(format!(
@@ -3807,12 +6466,38 @@ impl WorkspaceApp {
             .ok_or_else(|| anyhow!("no delete confirmation is pending"))?;
 
         match confirmation.operation {
-            PendingDeleteOperation::ExecuteSql {
+            PendingDeleteOperation::ExecuteStatement {
                 connection_index,
                 sql,
                 status,
-            } => self.execute_sql_on_connection(connection_index, sql, status.as_deref()),
-            PendingDeleteOperation::DeleteSavedSql { name, tab_id } => {
+                refresh_target,
+            } => self.execute_sql_on_connection(
+                connection_index,
+                sql,
+                status.as_deref(),
+                refresh_target,
+            ),
+            PendingDeleteOperation::PreviewInEditor {
+                connection_index,
+                database_name,
+                title,
+                sql,
+                status,
+                refresh_target,
+            } => {
+                self.open_editor_tab(connection_index, Some(database_name), title, sql);
+                if let Some(refresh_target) = refresh_target {
+                    self.set_active_editor_post_execute_refresh_target(refresh_target);
+                }
+                if let Some(tab) = self.active_editor_tab_mut() {
+                    tab.status = status;
+                }
+                self.workspace_status = Some(
+                    "Generated ALTER TABLE SQL in the editor; run it with Ctrl-Enter.".to_string(),
+                );
+                Ok(())
+            }
+            PendingDeleteOperation::DeleteSavedQuery { name, tab_id } => {
                 self.saved_sql.remove_by_name(&name);
                 if let Some(editor) = self.editor.as_mut() {
                     if let Some(tab) = editor.find_tab_mut_by_id(tab_id) {
@@ -3842,6 +6527,7 @@ impl WorkspaceApp {
         connection_index: usize,
         sql: String,
         status: Option<&str>,
+        refresh_target: Option<DbObjectRef>,
     ) -> Result<()> {
         if self
             .active_editor_tab()
@@ -3879,7 +6565,13 @@ impl WorkspaceApp {
 
         self.sql_history.push(sql.clone());
         let request_id = session.worker.request_sql_execution(database_name, sql)?;
-        session.pending.execute_requests.insert(request_id, tab_id);
+        session.pending.execute_requests.insert(
+            request_id,
+            PendingExecuteRequest {
+                tab_id,
+                refresh_target,
+            },
+        );
 
         if let Some(tab) = self.active_editor_tab_mut() {
             tab.pending_execute_request_id = Some(request_id);
@@ -4159,6 +6851,39 @@ impl WorkspaceApp {
         self.refresh_editor_completion();
     }
 
+    fn set_active_editor_post_execute_refresh_target(&mut self, target: DbObjectRef) {
+        if let Some(tab) = self.active_editor_tab_mut() {
+            tab.post_execute_refresh_target = Some(target);
+        }
+    }
+
+    fn selected_schema_target(&self) -> Result<(usize, String, String)> {
+        let connection_index = self
+            .selected_connection_index()
+            .ok_or_else(|| anyhow!("no connection is selected"))?;
+        let database_name = self
+            .selected_database_name()
+            .map(str::to_owned)
+            .or_else(|| {
+                self.sessions
+                    .get(connection_index)
+                    .and_then(|session| session.app.selected_database_name())
+                    .map(str::to_owned)
+            })
+            .ok_or_else(|| anyhow!("select a database, schema, or object first"))?;
+        let schema_name = self.selected_schema_name().map(str::to_owned).or_else(|| {
+            self.sessions.get(connection_index).and_then(|session| {
+                session
+                    .kind
+                    .collapses_duplicate_schema(&database_name, &database_name)
+                    .then_some(database_name.clone())
+            })
+        });
+
+        let schema_name = schema_name.ok_or_else(|| anyhow!("select a schema or object first"))?;
+        Ok((connection_index, database_name, schema_name))
+    }
+
     fn selected_table_target(&self) -> Result<(usize, DbObjectRef)> {
         let connection_index = self
             .selected_connection_index()
@@ -4194,6 +6919,7 @@ impl WorkspaceApp {
                     data_type: String::new(),
                     nullable: true,
                     has_default: false,
+                    is_unique: false,
                     is_primary_key: false,
                 })
                 .collect()
@@ -4446,6 +7172,14 @@ impl WorkspaceApp {
     }
 
     fn schedule_refresh_for_connection(&mut self, connection_index: usize) -> Result<()> {
+        self.schedule_refresh_for_connection_target(connection_index, None)
+    }
+
+    fn schedule_refresh_for_connection_target(
+        &mut self,
+        connection_index: usize,
+        refresh_target: Option<DbObjectRef>,
+    ) -> Result<()> {
         self.reset_grid_scroll();
         let session = self
             .sessions
@@ -4453,8 +7187,8 @@ impl WorkspaceApp {
             .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
 
         let mut cancel_ids = Vec::new();
-        if let Some(request_id) = session.pending.refresh_request_id {
-            cancel_ids.push(request_id);
+        if let Some(refresh_request) = &session.pending.refresh_request {
+            cancel_ids.push(refresh_request.request_id);
         }
         if let Some(preview_request) = &session.pending.preview_request {
             cancel_ids.push(preview_request.request_id);
@@ -4464,7 +7198,7 @@ impl WorkspaceApp {
         }
         cancel_ids.extend(session.pending.group_request_ids.values().copied());
         session.worker.cancel_requests(cancel_ids)?;
-        session.pending.refresh_request_id = None;
+        session.pending.refresh_request = None;
         session.pending.preview_request = None;
         session.pending.structure_request = None;
         session.pending.group_request_ids.clear();
@@ -4472,13 +7206,32 @@ impl WorkspaceApp {
             self.structure.clear();
         }
 
+        if let Some(target) = refresh_target.as_ref() {
+            session.expanded = true;
+            session.expanded_databases.insert(target.database.clone());
+            session
+                .expanded_schemas
+                .insert((target.database.clone(), target.schema.clone()));
+            session.expanded_groups.insert((
+                target.database.clone(),
+                target.schema.clone(),
+                target.kind,
+            ));
+        }
+
+        let request_refresh_target = refresh_target
+            .clone()
+            .or_else(|| session.app.selected_object().cloned());
         let request_id = session.worker.request_refresh(
-            session.app.selected_object().cloned(),
+            request_refresh_target,
             session.app.preview_limit(),
             self.preview_page_offset,
             self.active_data_filter.clone(),
         )?;
-        session.pending.refresh_request_id = Some(request_id);
+        session.pending.refresh_request = Some(PendingRefreshRequest {
+            request_id,
+            selection_target: refresh_target,
+        });
         session.app.set_status(format!(
             "Refreshing catalog for {}...",
             session.connection_label
@@ -4672,23 +7425,33 @@ impl WorkspaceApp {
                 preview_offset,
                 preview,
             } => {
-                let selected_key = self
+                let mut selected_key = self
                     .entries
                     .get(self.selected_row)
                     .map(|entry| entry.key.clone());
-
                 let mut schedule_follow_up_preview = None;
                 {
                     let session = self
                         .sessions
                         .get_mut(session_index)
                         .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
-                    if session.pending.refresh_request_id != Some(request_id) {
+                    let Some(pending_refresh) = session.pending.refresh_request.as_ref() else {
+                        return Ok(());
+                    };
+                    if pending_refresh.request_id != request_id {
                         return Ok(());
                     }
 
+                    let selection_target = pending_refresh.selection_target.clone();
+                    if let Some(target) = selection_target.as_ref() {
+                        selected_key = Some(TreeNodeKey::Object {
+                            connection: session_index,
+                            object: target.clone(),
+                        });
+                    }
+
                     let current_selected_object = session.app.selected_object().cloned();
-                    session.pending.refresh_request_id = None;
+                    session.pending.refresh_request = None;
                     match catalog_summary {
                         Ok(catalog_summary) => {
                             session.catalog_summary = catalog_summary.clone();
@@ -4706,8 +7469,11 @@ impl WorkspaceApp {
                                             loaded_group.kind,
                                             objects,
                                         )?;
+                                        let target_for_selection = selection_target
+                                            .as_ref()
+                                            .or(current_selected_object.as_ref());
                                         if let Some(target) =
-                                            current_selected_object.as_ref().filter(|target| {
+                                            target_for_selection.filter(|target| {
                                                 target.database == loaded_group.database
                                                     && target.schema == loaded_group.schema
                                                     && target.kind == loaded_group.kind
@@ -4897,15 +7663,17 @@ impl WorkspaceApp {
                 }
             }
             SessionEvent::SqlExecuted { request_id, result } => {
-                let tab_id = {
+                let pending_execute = {
                     let session = self
                         .sessions
                         .get_mut(session_index)
                         .ok_or_else(|| anyhow!("selected connection no longer exists"))?;
-                    let Some(tab_id) = session.pending.execute_requests.remove(&request_id) else {
+                    let Some(pending_execute) =
+                        session.pending.execute_requests.remove(&request_id)
+                    else {
                         return Ok(());
                     };
-                    tab_id
+                    pending_execute
                 };
 
                 match result {
@@ -4918,7 +7686,7 @@ impl WorkspaceApp {
 
                         let mut applied_sql_results = false;
                         if let Some(editor) = self.editor.as_mut() {
-                            if let Some(tab) = editor.find_tab_mut_by_id(tab_id) {
+                            if let Some(tab) = editor.find_tab_mut_by_id(pending_execute.tab_id) {
                                 tab.pending_execute_request_id = None;
                                 tab.status = Some(tab_status.clone());
                                 tab.result_sets = result_sets;
@@ -4937,12 +7705,15 @@ impl WorkspaceApp {
                         }
 
                         if should_refresh {
-                            self.schedule_refresh_for_connection(session_index)?;
+                            self.schedule_refresh_for_connection_target(
+                                session_index,
+                                pending_execute.refresh_target,
+                            )?;
                         }
                     }
                     Err(error) => {
                         if let Some(editor) = self.editor.as_mut() {
-                            if let Some(tab) = editor.find_tab_mut_by_id(tab_id) {
+                            if let Some(tab) = editor.find_tab_mut_by_id(pending_execute.tab_id) {
                                 tab.pending_execute_request_id = None;
                                 tab.status = Some(error);
                                 tab.rebuild_result_strip();
@@ -4974,7 +7745,7 @@ impl WorkspaceApp {
 impl PendingSessionWork {
     fn count(&self) -> usize {
         usize::from(self.preview_request.is_some())
-            + usize::from(self.refresh_request_id.is_some())
+            + usize::from(self.refresh_request.is_some())
             + self.group_request_ids.len()
             + usize::from(self.template_request.is_some())
             + usize::from(self.structure_request.is_some())
@@ -4987,7 +7758,7 @@ impl PendingSessionWork {
 
     fn clear(&mut self) {
         self.preview_request = None;
-        self.refresh_request_id = None;
+        self.refresh_request = None;
         self.group_request_ids.clear();
         self.template_request = None;
         self.structure_request = None;
@@ -4999,8 +7770,8 @@ impl PendingSessionWork {
         if let Some(preview_request) = &self.preview_request {
             request_ids.push(preview_request.request_id);
         }
-        if let Some(request_id) = self.refresh_request_id {
-            request_ids.push(request_id);
+        if let Some(refresh_request) = &self.refresh_request {
+            request_ids.push(refresh_request.request_id);
         }
         request_ids.extend(self.group_request_ids.values().copied());
         if let Some(template_request) = &self.template_request {
@@ -5485,6 +8256,7 @@ impl SqlEditorTab {
             result_sets: Vec::new(),
             selected_result: 0,
             pending_execute_request_id: None,
+            post_execute_refresh_target: None,
             result_strip: String::new(),
         }
     }
@@ -6041,6 +8813,295 @@ fn sql_preview(sql: &str) -> String {
     preview
 }
 
+const STRUCTURE_EDITOR_EXISTING_DEFAULT_SENTINEL: &str = "__relora_existing_default__";
+
+fn create_table_active_text_target(form: &mut CreateTableFormState) -> Option<&mut String> {
+    if form.selected_row == 0 || form.selected_focus == CreateTableFieldFocus::TableName {
+        return Some(&mut form.table_name);
+    }
+
+    match form.selected_focus {
+        CreateTableFieldFocus::ColumnName => form
+            .columns
+            .get_mut(form.selected_row.checked_sub(1)?)
+            .map(|column| &mut column.name),
+        CreateTableFieldFocus::DefaultValue => form
+            .columns
+            .get_mut(form.selected_row.checked_sub(1)?)
+            .map(|column| &mut column.default_value),
+        CreateTableFieldFocus::ColumnType
+        | CreateTableFieldFocus::Nullable
+        | CreateTableFieldFocus::Unique
+        | CreateTableFieldFocus::AutoIncrement
+        | CreateTableFieldFocus::PrimaryKey => None,
+        CreateTableFieldFocus::TableName => Some(&mut form.table_name),
+    }
+}
+
+fn structure_editor_active_text_target(form: &mut StructureEditorFormState) -> Option<&mut String> {
+    if form.selected_row == 0 || form.selected_focus == StructureEditorFieldFocus::TableName {
+        return Some(&mut form.table_name);
+    }
+
+    match form.selected_focus {
+        StructureEditorFieldFocus::ColumnName => form
+            .columns
+            .get_mut(form.selected_row.checked_sub(1)?)
+            .map(|column| &mut column.name),
+        StructureEditorFieldFocus::DefaultValue => form
+            .columns
+            .get_mut(form.selected_row.checked_sub(1)?)
+            .map(|column| &mut column.default_value),
+        StructureEditorFieldFocus::ColumnType
+        | StructureEditorFieldFocus::Nullable
+        | StructureEditorFieldFocus::Unique
+        | StructureEditorFieldFocus::PrimaryKey => None,
+        StructureEditorFieldFocus::TableName => Some(&mut form.table_name),
+    }
+}
+
+fn structure_editor_default_as_option(default_value: &str) -> Option<&str> {
+    let value = default_value.trim();
+    if value.is_empty() {
+        None
+    } else if value == STRUCTURE_EDITOR_EXISTING_DEFAULT_SENTINEL {
+        Some(STRUCTURE_EDITOR_EXISTING_DEFAULT_SENTINEL)
+    } else {
+        Some(value)
+    }
+}
+
+fn structure_editor_default_display_value(default_value: &str) -> Option<String> {
+    let value = default_value.trim();
+    if value.is_empty() {
+        None
+    } else if value == STRUCTURE_EDITOR_EXISTING_DEFAULT_SENTINEL {
+        Some("<existing default>".to_string())
+    } else {
+        Some(default_value.to_string())
+    }
+}
+
+fn create_table_type_options(kind: DatabaseKind) -> &'static [CreateTableTypeOption] {
+    match kind {
+        DatabaseKind::Postgres => &[
+            CreateTableTypeOption {
+                label: "integer",
+                sql: "integer",
+            },
+            CreateTableTypeOption {
+                label: "bigint",
+                sql: "bigint",
+            },
+            CreateTableTypeOption {
+                label: "text",
+                sql: "text",
+            },
+            CreateTableTypeOption {
+                label: "boolean",
+                sql: "boolean",
+            },
+            CreateTableTypeOption {
+                label: "numeric",
+                sql: "numeric",
+            },
+            CreateTableTypeOption {
+                label: "date",
+                sql: "date",
+            },
+            CreateTableTypeOption {
+                label: "timestamp",
+                sql: "timestamp",
+            },
+            CreateTableTypeOption {
+                label: "timestamptz",
+                sql: "timestamptz",
+            },
+            CreateTableTypeOption {
+                label: "jsonb",
+                sql: "jsonb",
+            },
+            CreateTableTypeOption {
+                label: "uuid",
+                sql: "uuid",
+            },
+        ],
+        DatabaseKind::MySql => &[
+            CreateTableTypeOption {
+                label: "int",
+                sql: "int",
+            },
+            CreateTableTypeOption {
+                label: "bigint",
+                sql: "bigint",
+            },
+            CreateTableTypeOption {
+                label: "varchar(255)",
+                sql: "varchar(255)",
+            },
+            CreateTableTypeOption {
+                label: "text",
+                sql: "text",
+            },
+            CreateTableTypeOption {
+                label: "boolean",
+                sql: "boolean",
+            },
+            CreateTableTypeOption {
+                label: "decimal(10,2)",
+                sql: "decimal(10,2)",
+            },
+            CreateTableTypeOption {
+                label: "date",
+                sql: "date",
+            },
+            CreateTableTypeOption {
+                label: "datetime",
+                sql: "datetime",
+            },
+            CreateTableTypeOption {
+                label: "timestamp",
+                sql: "timestamp",
+            },
+            CreateTableTypeOption {
+                label: "json",
+                sql: "json",
+            },
+        ],
+        DatabaseKind::Sqlite => &[
+            CreateTableTypeOption {
+                label: "INTEGER",
+                sql: "INTEGER",
+            },
+            CreateTableTypeOption {
+                label: "TEXT",
+                sql: "TEXT",
+            },
+            CreateTableTypeOption {
+                label: "REAL",
+                sql: "REAL",
+            },
+            CreateTableTypeOption {
+                label: "NUMERIC",
+                sql: "NUMERIC",
+            },
+            CreateTableTypeOption {
+                label: "BLOB",
+                sql: "BLOB",
+            },
+            CreateTableTypeOption {
+                label: "DATE",
+                sql: "DATE",
+            },
+            CreateTableTypeOption {
+                label: "DATETIME",
+                sql: "DATETIME",
+            },
+        ],
+    }
+}
+
+fn create_table_type_index(kind: DatabaseKind, label: &str) -> usize {
+    create_table_type_options(kind)
+        .iter()
+        .position(|option| option.label.eq_ignore_ascii_case(label))
+        .unwrap_or(0)
+}
+
+fn default_create_table_primary_type(kind: DatabaseKind) -> CreateTableTypeOption {
+    let label = match kind {
+        DatabaseKind::Postgres => "integer",
+        DatabaseKind::MySql => "int",
+        DatabaseKind::Sqlite => "INTEGER",
+    };
+
+    create_table_type_options(kind)
+        .get(create_table_type_index(kind, label))
+        .copied()
+        .unwrap_or(create_table_type_options(kind)[0])
+}
+
+fn create_table_auto_increment_type_index(kind: DatabaseKind) -> usize {
+    let label = match kind {
+        DatabaseKind::Postgres => "integer",
+        DatabaseKind::MySql => "int",
+        DatabaseKind::Sqlite => "INTEGER",
+    };
+    create_table_type_index(kind, label)
+}
+
+fn default_index_name(table_name: &str, column_name: &str) -> String {
+    format!("{table_name}_{column_name}_idx")
+}
+
+fn default_create_table_primary_column(kind: DatabaseKind) -> CreateTableColumnState {
+    CreateTableColumnState {
+        name: "id".to_string(),
+        type_index: create_table_type_index(kind, default_create_table_primary_type(kind).label),
+        default_value: String::new(),
+        nullable: false,
+        unique: false,
+        auto_increment: false,
+        primary_key: true,
+    }
+}
+
+fn default_create_table_regular_column(
+    kind: DatabaseKind,
+    ordinal: usize,
+) -> CreateTableColumnState {
+    let label = match kind {
+        DatabaseKind::Postgres => "text",
+        DatabaseKind::MySql => "varchar(255)",
+        DatabaseKind::Sqlite => "TEXT",
+    };
+
+    CreateTableColumnState {
+        name: format!("column_{ordinal}"),
+        type_index: create_table_type_index(kind, label),
+        default_value: String::new(),
+        nullable: true,
+        unique: false,
+        auto_increment: false,
+        primary_key: false,
+    }
+}
+
+fn default_structure_editor_regular_column(
+    kind: DatabaseKind,
+    ordinal: usize,
+) -> StructureEditorColumnState {
+    let default_column = default_create_table_regular_column(kind, ordinal);
+    let data_type = create_table_type_options(kind)
+        .get(default_column.type_index)
+        .map(|option| option.label.to_string())
+        .unwrap_or_else(|| create_table_type_options(kind)[0].label.to_string());
+
+    StructureEditorColumnState {
+        original_name: None,
+        original_data_type: None,
+        original_nullable: None,
+        original_default: None,
+        original_unique: None,
+        original_primary_key: None,
+        name: String::new(),
+        data_type,
+        default_value: default_column.default_value,
+        nullable: default_column.nullable,
+        unique: false,
+        primary_key: false,
+    }
+}
+
+fn structure_editor_column_identity(column: &StructureEditorColumnState) -> Option<String> {
+    if let Some(original_name) = column.original_name.as_deref() {
+        Some(format!("existing:{original_name}"))
+    } else {
+        let name = column.name.trim();
+        (!name.is_empty()).then_some(format!("new:{name}"))
+    }
+}
+
 fn classify_insert_row_field_kind(data_type: &str) -> InsertRowFieldKind {
     let normalized = data_type.trim().to_ascii_lowercase();
     if normalized.is_empty() {
@@ -6436,7 +9497,12 @@ fn structure_grid_from_columns(columns: &[DbColumn]) -> TablePreview {
                     column.data_type.clone(),
                     if column.nullable { "YES" } else { "NO" }.to_string(),
                     if column.has_default { "YES" } else { "" }.to_string(),
-                    if column.is_primary_key { "PK" } else { "" }.to_string(),
+                    match (column.is_primary_key, column.is_unique) {
+                        (true, true) => "PK UNIQUE".to_string(),
+                        (true, false) => "PK".to_string(),
+                        (false, true) => "UNIQUE".to_string(),
+                        (false, false) => String::new(),
+                    },
                 ]
             })
             .collect(),

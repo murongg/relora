@@ -32,8 +32,9 @@ use relora_app::{
     completion::CompletionKind,
     syntax::{SqlTokenKind, highlight_sql_line},
     view::{
-        CellEditView, CommandPaletteView, DataFilterView, DeleteConfirmationView, EditorView,
-        RightPaneTab, RowInspectorPane, RowInspectorView, SqlHistoryView, WorkspaceView,
+        CellEditView, CommandPaletteView, CreateTableFieldFocusView, DataFilterView,
+        DeleteConfirmationView, EditorView, RightPaneTab, RowInspectorPane, RowInspectorView,
+        SqlHistoryView, WorkspaceView,
     },
 };
 use relora_core::db::TablePreview;

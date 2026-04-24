@@ -25,6 +25,13 @@ fn workspace_can_return_to_launcher(workspace: &WorkspaceApp) -> bool {
         && !workspace.command_palette_open()
         && !workspace.saved_sql_open()
         && !workspace.save_sql_dialog_open()
+        && !workspace.create_table_form_open()
+        && !workspace.structure_editor_form_open()
+        && !workspace.alter_column_form_open()
+        && !workspace.add_column_form_open()
+        && !workspace.rename_table_form_open()
+        && !workspace.create_index_form_open()
+        && !workspace.drop_index_form_open()
         && !workspace.insert_row_form_open()
         && !workspace.sql_history_open()
         && !workspace.data_filter_open()
@@ -58,6 +65,34 @@ pub(super) fn handle_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
 
     if app.save_sql_dialog_open() {
         return handle_save_sql_dialog_key(app, key);
+    }
+
+    if app.create_table_form_open() {
+        return handle_create_table_form_key(app, key);
+    }
+
+    if app.structure_editor_form_open() {
+        return handle_structure_editor_form_key(app, key);
+    }
+
+    if app.alter_column_form_open() {
+        return handle_alter_column_form_key(app, key);
+    }
+
+    if app.add_column_form_open() {
+        return handle_add_column_form_key(app, key);
+    }
+
+    if app.rename_table_form_open() {
+        return handle_rename_table_form_key(app, key);
+    }
+
+    if app.create_index_form_open() {
+        return handle_create_index_form_key(app, key);
+    }
+
+    if app.drop_index_form_open() {
+        return handle_drop_index_form_key(app, key);
     }
 
     if app.insert_row_form_open() {
@@ -129,6 +164,48 @@ pub(super) fn handle_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
             app.apply_action(WorkspaceAction::CloseEditorCompletion)?;
         }
         return app.apply_action(WorkspaceAction::ReverseBrowserFocus);
+    }
+
+    if app.active_right_tab() == RightPaneTab::Structure
+        && key.code == KeyCode::Char(KEY_STRUCTURE_EDIT_COLUMN)
+    {
+        app.apply_action(WorkspaceAction::OpenStructureEditor)?;
+        return Ok(());
+    }
+
+    if app.active_right_tab() == RightPaneTab::Structure
+        && key.code == KeyCode::Char(KEY_STRUCTURE_ADD_COLUMN)
+    {
+        app.apply_action(WorkspaceAction::OpenAddColumnForm)?;
+        return Ok(());
+    }
+
+    if app.active_right_tab() == RightPaneTab::Structure
+        && key.code == KeyCode::Char(KEY_STRUCTURE_DROP_COLUMN)
+    {
+        app.apply_action(WorkspaceAction::PromptDropStructureColumn)?;
+        return Ok(());
+    }
+
+    if app.active_right_tab() == RightPaneTab::Structure
+        && key.code == KeyCode::Char(KEY_STRUCTURE_RENAME_TABLE)
+    {
+        app.apply_action(WorkspaceAction::OpenRenameTableForm)?;
+        return Ok(());
+    }
+
+    if app.active_right_tab() == RightPaneTab::Structure
+        && key.code == KeyCode::Char(KEY_STRUCTURE_CREATE_INDEX)
+    {
+        app.apply_action(WorkspaceAction::OpenCreateIndexForm)?;
+        return Ok(());
+    }
+
+    if app.active_right_tab() == RightPaneTab::Structure
+        && key.code == KeyCode::Char(KEY_STRUCTURE_DROP_INDEX)
+    {
+        app.apply_action(WorkspaceAction::OpenDropIndexForm)?;
+        return Ok(());
     }
 
     if app.data_grid_focused() {
@@ -579,6 +656,285 @@ pub(super) fn handle_insert_row_form_key(app: &mut WorkspaceApp, key: KeyEvent) 
     }
 }
 
+pub(super) fn handle_create_table_form_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return match key.code {
+            KeyCode::Enter => app.preview_and_execute_create_table_form(),
+            KeyCode::Char('u') | KeyCode::Char('U') => app.clear_create_table_form_field(),
+            _ => Ok(()),
+        };
+    }
+
+    match key.code {
+        KeyCode::Esc => app.apply_action(WorkspaceAction::CloseCreateTableForm),
+        KeyCode::Enter => app.apply_action(WorkspaceAction::PreviewCreateTableForm),
+        KeyCode::Tab => app.apply_action(WorkspaceAction::MoveCreateTableFieldRight),
+        KeyCode::BackTab => app.apply_action(WorkspaceAction::MoveCreateTableFieldLeft),
+        KeyCode::Down | KeyCode::Char(KEY_BROWSER_DOWN) => {
+            app.apply_action(WorkspaceAction::NextCreateTableField)
+        }
+        KeyCode::Up | KeyCode::Char(KEY_BROWSER_UP) => {
+            app.apply_action(WorkspaceAction::PreviousCreateTableField)
+        }
+        KeyCode::Left => {
+            if app.create_table_form_selected_field_is_type() {
+                app.apply_action(WorkspaceAction::CycleCreateTableColumnTypePrevious)
+            } else {
+                app.apply_action(WorkspaceAction::MoveCreateTableFieldLeft)
+            }
+        }
+        KeyCode::Right => {
+            if app.create_table_form_selected_field_is_type() {
+                app.apply_action(WorkspaceAction::CycleCreateTableColumnTypeNext)
+            } else {
+                app.apply_action(WorkspaceAction::MoveCreateTableFieldRight)
+            }
+        }
+        KeyCode::Backspace => app.backspace_create_table_form(),
+        KeyCode::Char(KEY_CREATE_TABLE_ADD_COLUMN) => {
+            app.apply_action(WorkspaceAction::AddCreateTableColumn)
+        }
+        KeyCode::Char(KEY_CREATE_TABLE_REMOVE_COLUMN) => {
+            app.apply_action(WorkspaceAction::RemoveCreateTableColumn)
+        }
+        KeyCode::Char(KEY_CREATE_TABLE_TOGGLE)
+            if app.create_table_form_selected_field_is_type() =>
+        {
+            app.apply_action(WorkspaceAction::CycleCreateTableColumnTypeNext)
+        }
+        KeyCode::Char(KEY_CREATE_TABLE_TOGGLE)
+            if app.create_table_form_selected_field_is_toggle() =>
+        {
+            match app
+                .create_table_form_snapshot()
+                .map(|form| form.selected_focus)
+            {
+                Some(CreateTableFieldFocusView::Nullable) => {
+                    app.apply_action(WorkspaceAction::ToggleCreateTableColumnNullable)
+                }
+                Some(CreateTableFieldFocusView::Unique) => {
+                    app.apply_action(WorkspaceAction::ToggleCreateTableColumnUnique)
+                }
+                Some(CreateTableFieldFocusView::AutoIncrement) => {
+                    app.apply_action(WorkspaceAction::ToggleCreateTableColumnAutoIncrement)
+                }
+                Some(CreateTableFieldFocusView::PrimaryKey) => {
+                    app.apply_action(WorkspaceAction::ToggleCreateTableColumnPrimaryKey)
+                }
+                _ => Ok(()),
+            }
+        }
+        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.insert_create_table_form_char(ch)
+        }
+        _ => Ok(()),
+    }
+}
+
+pub(super) fn handle_alter_column_form_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return match key.code {
+            KeyCode::Char('u') | KeyCode::Char('U') => app.clear_alter_column_form_field(),
+            _ => Ok(()),
+        };
+    }
+
+    match key.code {
+        KeyCode::Esc => app.apply_action(WorkspaceAction::CloseAlterColumnForm),
+        KeyCode::Enter => app.apply_action(WorkspaceAction::PreviewAlterColumnForm),
+        KeyCode::Tab => app.apply_action(WorkspaceAction::NextAlterColumnField),
+        KeyCode::BackTab => app.apply_action(WorkspaceAction::PreviousAlterColumnField),
+        KeyCode::Left if app.alter_column_form_selected_field_is_type() => {
+            app.apply_action(WorkspaceAction::CycleAlterColumnTypePrevious)
+        }
+        KeyCode::Right if app.alter_column_form_selected_field_is_type() => {
+            app.apply_action(WorkspaceAction::CycleAlterColumnTypeNext)
+        }
+        KeyCode::Char(KEY_CREATE_TABLE_TOGGLE)
+            if app.alter_column_form_selected_field_is_type() =>
+        {
+            app.apply_action(WorkspaceAction::CycleAlterColumnTypeNext)
+        }
+        KeyCode::Char(KEY_CREATE_TABLE_TOGGLE)
+            if app.alter_column_form_selected_field_is_nullable() =>
+        {
+            app.apply_action(WorkspaceAction::ToggleAlterColumnNullable)
+        }
+        KeyCode::Backspace => app.backspace_alter_column_form(),
+        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.insert_alter_column_form_char(ch)
+        }
+        _ => Ok(()),
+    }
+}
+
+pub(super) fn handle_structure_editor_form_key(
+    app: &mut WorkspaceApp,
+    key: KeyEvent,
+) -> Result<()> {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return match key.code {
+            KeyCode::Enter => app.preview_and_execute_structure_editor_form(),
+            KeyCode::Char('u') | KeyCode::Char('U') => app.clear_structure_editor_form_field(),
+            _ => Ok(()),
+        };
+    }
+
+    match key.code {
+        KeyCode::Esc => app.apply_action(WorkspaceAction::CloseStructureEditorForm),
+        KeyCode::Enter => app.apply_action(WorkspaceAction::PreviewStructureEditorForm),
+        KeyCode::Tab => app.apply_action(WorkspaceAction::MoveStructureEditorFieldRight),
+        KeyCode::BackTab => app.apply_action(WorkspaceAction::MoveStructureEditorFieldLeft),
+        KeyCode::Down | KeyCode::Char(KEY_BROWSER_DOWN) => {
+            app.apply_action(WorkspaceAction::NextStructureEditorField)
+        }
+        KeyCode::Up | KeyCode::Char(KEY_BROWSER_UP) => {
+            app.apply_action(WorkspaceAction::PreviousStructureEditorField)
+        }
+        KeyCode::Left => {
+            if app.structure_editor_form_selected_field_is_type() {
+                app.apply_action(WorkspaceAction::CycleStructureEditorColumnTypePrevious)
+            } else {
+                app.apply_action(WorkspaceAction::MoveStructureEditorFieldLeft)
+            }
+        }
+        KeyCode::Right => {
+            if app.structure_editor_form_selected_field_is_type() {
+                app.apply_action(WorkspaceAction::CycleStructureEditorColumnTypeNext)
+            } else {
+                app.apply_action(WorkspaceAction::MoveStructureEditorFieldRight)
+            }
+        }
+        KeyCode::Backspace => app.backspace_structure_editor_form(),
+        KeyCode::Char(KEY_CREATE_TABLE_ADD_COLUMN) => {
+            app.apply_action(WorkspaceAction::AddStructureEditorColumn)
+        }
+        KeyCode::Char(KEY_CREATE_TABLE_REMOVE_COLUMN) => {
+            app.apply_action(WorkspaceAction::RemoveStructureEditorColumn)
+        }
+        KeyCode::Char(KEY_CREATE_TABLE_TOGGLE)
+            if app.structure_editor_form_selected_field_is_type() =>
+        {
+            app.apply_action(WorkspaceAction::CycleStructureEditorColumnTypeNext)
+        }
+        KeyCode::Char(KEY_CREATE_TABLE_TOGGLE)
+            if app.structure_editor_form_selected_field_is_nullable() =>
+        {
+            app.apply_action(WorkspaceAction::ToggleStructureEditorNullable)
+        }
+        KeyCode::Char(KEY_CREATE_TABLE_TOGGLE)
+            if app.structure_editor_form_selected_field_is_toggle() =>
+        {
+            if app.structure_editor_form_selected_field_is_nullable() {
+                app.apply_action(WorkspaceAction::ToggleStructureEditorNullable)
+            } else if app.structure_editor_form_selected_field_is_unique() {
+                app.apply_action(WorkspaceAction::ToggleStructureEditorUnique)
+            } else {
+                app.apply_action(WorkspaceAction::ToggleStructureEditorPrimaryKey)
+            }
+        }
+        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.insert_structure_editor_form_char(ch)
+        }
+        _ => Ok(()),
+    }
+}
+
+pub(super) fn handle_add_column_form_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return match key.code {
+            KeyCode::Char('u') | KeyCode::Char('U') => app.clear_add_column_form_field(),
+            _ => Ok(()),
+        };
+    }
+
+    match key.code {
+        KeyCode::Esc => app.apply_action(WorkspaceAction::CloseAddColumnForm),
+        KeyCode::Enter => app.apply_action(WorkspaceAction::PreviewAddColumnForm),
+        KeyCode::Tab => app.apply_action(WorkspaceAction::NextAddColumnField),
+        KeyCode::BackTab => app.apply_action(WorkspaceAction::PreviousAddColumnField),
+        KeyCode::Left if app.add_column_form_selected_field_is_type() => {
+            app.apply_action(WorkspaceAction::CycleAddColumnTypePrevious)
+        }
+        KeyCode::Right if app.add_column_form_selected_field_is_type() => {
+            app.apply_action(WorkspaceAction::CycleAddColumnTypeNext)
+        }
+        KeyCode::Char(KEY_CREATE_TABLE_TOGGLE) if app.add_column_form_selected_field_is_type() => {
+            app.apply_action(WorkspaceAction::CycleAddColumnTypeNext)
+        }
+        KeyCode::Char(KEY_CREATE_TABLE_TOGGLE)
+            if app.add_column_form_selected_field_is_nullable() =>
+        {
+            app.apply_action(WorkspaceAction::ToggleAddColumnNullable)
+        }
+        KeyCode::Backspace => app.backspace_add_column_form(),
+        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.insert_add_column_form_char(ch)
+        }
+        _ => Ok(()),
+    }
+}
+
+pub(super) fn handle_rename_table_form_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return match key.code {
+            KeyCode::Char('u') | KeyCode::Char('U') => app.clear_rename_table_form(),
+            _ => Ok(()),
+        };
+    }
+
+    match key.code {
+        KeyCode::Esc => app.apply_action(WorkspaceAction::CloseRenameTableForm),
+        KeyCode::Enter => app.apply_action(WorkspaceAction::PreviewRenameTableForm),
+        KeyCode::Backspace => app.backspace_rename_table_form(),
+        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.insert_rename_table_form_char(ch)
+        }
+        _ => Ok(()),
+    }
+}
+
+pub(super) fn handle_create_index_form_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return match key.code {
+            KeyCode::Char('u') | KeyCode::Char('U') => app.clear_create_index_form(),
+            _ => Ok(()),
+        };
+    }
+
+    match key.code {
+        KeyCode::Esc => app.apply_action(WorkspaceAction::CloseCreateIndexForm),
+        KeyCode::Enter => app.apply_action(WorkspaceAction::PreviewCreateIndexForm),
+        KeyCode::Char(KEY_CREATE_TABLE_TOGGLE) if app.create_index_form_unique_selected() => {
+            app.apply_action(WorkspaceAction::ToggleCreateIndexUnique)
+        }
+        KeyCode::Backspace => app.backspace_create_index_form(),
+        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.insert_create_index_form_char(ch)
+        }
+        _ => Ok(()),
+    }
+}
+
+pub(super) fn handle_drop_index_form_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return match key.code {
+            KeyCode::Char('u') | KeyCode::Char('U') => app.clear_drop_index_form(),
+            _ => Ok(()),
+        };
+    }
+
+    match key.code {
+        KeyCode::Esc => app.apply_action(WorkspaceAction::CloseDropIndexForm),
+        KeyCode::Enter => app.apply_action(WorkspaceAction::PreviewDropIndexForm),
+        KeyCode::Backspace => app.backspace_drop_index_form(),
+        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.insert_drop_index_form_char(ch)
+        }
+        _ => Ok(()),
+    }
+}
+
 pub(super) fn handle_data_filter_key(app: &mut WorkspaceApp, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::Esc => app.apply_action(WorkspaceAction::CloseDataFilter),
@@ -628,6 +984,16 @@ pub(super) fn handle_row_inspector_key(app: &mut WorkspaceApp, key: KeyEvent) ->
         }
         KeyCode::Tab => app.apply_action(WorkspaceAction::NextRowInspectorPane),
         KeyCode::BackTab => app.apply_action(WorkspaceAction::PreviousRowInspectorPane),
+        KeyCode::Right | KeyCode::Char(KEY_BROWSER_EXPAND_RIGHT) => match active_pane {
+            RowInspectorPane::Fields => app.apply_action(WorkspaceAction::NextRowInspectorPane),
+            RowInspectorPane::Preview => Ok(()),
+        },
+        KeyCode::Left | KeyCode::Char(KEY_BROWSER_EXPAND_LEFT) => match active_pane {
+            RowInspectorPane::Fields => Ok(()),
+            RowInspectorPane::Preview => {
+                app.apply_action(WorkspaceAction::PreviousRowInspectorPane)
+            }
+        },
         KeyCode::Down | KeyCode::Char(KEY_ROW_INSPECTOR_DOWN) => match active_pane {
             RowInspectorPane::Fields => app.apply_action(WorkspaceAction::NextRowInspectorField),
             RowInspectorPane::Preview => {
@@ -835,6 +1201,7 @@ pub(super) fn map_browser_key_to_action(key: KeyEvent) -> Option<WorkspaceAction
         KeyCode::Char(KEY_BROWSER_REFRESH) => Some(WorkspaceAction::Refresh),
         KeyCode::Char(KEY_BROWSER_CANCEL_TASKS) => Some(WorkspaceAction::CancelTasks),
         KeyCode::Char(KEY_BROWSER_OPEN_SQL) => Some(WorkspaceAction::OpenSqlEditor),
+        KeyCode::Char(KEY_BROWSER_CREATE_TABLE) => Some(WorkspaceAction::OpenCreateTableForm),
         KeyCode::Char(KEY_BROWSER_TEMPLATE_SELECT) => Some(WorkspaceAction::OpenSelectTemplate),
         KeyCode::Char(KEY_BROWSER_TEMPLATE_INSERT) => Some(WorkspaceAction::OpenInsertTemplate),
         KeyCode::Char(KEY_BROWSER_TEMPLATE_UPDATE) => Some(WorkspaceAction::OpenUpdateTemplate),

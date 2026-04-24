@@ -59,6 +59,139 @@ pub struct SaveSqlDialogView<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreateTableFieldFocusView {
+    TableName,
+    ColumnName,
+    ColumnType,
+    DefaultValue,
+    Nullable,
+    Unique,
+    AutoIncrement,
+    PrimaryKey,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateTableColumnSnapshot {
+    pub name: String,
+    pub type_label: String,
+    pub default_value: Option<String>,
+    pub nullable: bool,
+    pub unique: bool,
+    pub auto_increment: bool,
+    pub primary_key: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateTableFormSnapshot {
+    pub database_name: String,
+    pub schema_name: String,
+    pub table_name: String,
+    pub selected_row: usize,
+    pub selected_focus: CreateTableFieldFocusView,
+    pub columns: Vec<CreateTableColumnSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlterColumnFieldFocusView {
+    ColumnName,
+    ColumnType,
+    DefaultValue,
+    Nullable,
+}
+
+#[derive(Debug, Clone)]
+pub struct AlterColumnFormSnapshot {
+    pub database_name: String,
+    pub schema_name: String,
+    pub table_name: String,
+    pub old_name: String,
+    pub new_name: String,
+    pub type_label: String,
+    pub default_value: Option<String>,
+    pub nullable: bool,
+    pub selected_focus: AlterColumnFieldFocusView,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddColumnFieldFocusView {
+    ColumnName,
+    ColumnType,
+    Nullable,
+    DefaultValue,
+}
+
+#[derive(Debug, Clone)]
+pub struct AddColumnFormSnapshot {
+    pub database_name: String,
+    pub schema_name: String,
+    pub table_name: String,
+    pub name: String,
+    pub type_label: String,
+    pub nullable: bool,
+    pub default_value: Option<String>,
+    pub selected_focus: AddColumnFieldFocusView,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StructureEditorFieldFocusView {
+    TableName,
+    ColumnName,
+    ColumnType,
+    DefaultValue,
+    Nullable,
+    Unique,
+    PrimaryKey,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructureEditorColumnSnapshot {
+    pub name: String,
+    pub type_label: String,
+    pub default_value: Option<String>,
+    pub nullable: bool,
+    pub unique: bool,
+    pub primary_key: bool,
+    pub existing: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructureEditorFormSnapshot {
+    pub database_name: String,
+    pub schema_name: String,
+    pub old_table_name: String,
+    pub table_name: String,
+    pub selected_row: usize,
+    pub selected_focus: StructureEditorFieldFocusView,
+    pub columns: Vec<StructureEditorColumnSnapshot>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenameTableFormSnapshot {
+    pub database_name: String,
+    pub schema_name: String,
+    pub old_name: String,
+    pub new_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateIndexFormSnapshot {
+    pub database_name: String,
+    pub schema_name: String,
+    pub table_name: String,
+    pub column_name: String,
+    pub index_name: String,
+    pub unique: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct DropIndexFormSnapshot {
+    pub database_name: String,
+    pub schema_name: String,
+    pub table_name: String,
+    pub index_name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InsertRowFieldKindView {
     Text,
     Number,
@@ -203,6 +336,13 @@ pub struct WorkspaceView<'a> {
     pub sql_history: Option<SqlHistoryView<'a>>,
     pub saved_sql: Option<SavedSqlView<'a>>,
     pub save_sql_dialog: Option<SaveSqlDialogView<'a>>,
+    pub create_table_form_open: bool,
+    pub structure_editor_form_open: bool,
+    pub alter_column_form_open: bool,
+    pub add_column_form_open: bool,
+    pub rename_table_form_open: bool,
+    pub create_index_form_open: bool,
+    pub drop_index_form_open: bool,
     pub insert_row_form_open: bool,
     pub data_filter: Option<DataFilterView<'a>>,
     pub cell_edit: Option<CellEditView<'a>>,

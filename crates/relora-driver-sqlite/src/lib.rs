@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use anyhow::{Context, Result, bail};
 use relora_core::db::{
     Catalog, CatalogSummary, CommandResult, DatabaseDriver, DatabaseEntry, DatabaseKind,
@@ -67,11 +69,20 @@ impl SqliteDriver {
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .context("failed to read SQLite xinfo columns")
             .map(|columns| {
+                let unique_columns = self
+                    .load_single_column_unique_columns(table)
+                    .unwrap_or_default();
                 columns
                     .into_iter()
                     // SQLite marks internal virtual-table columns as hidden=1.
                     // Generated columns are surfaced as 2/3 and should stay visible.
-                    .filter_map(|(hidden_flag, column)| (hidden_flag != 1).then_some(column))
+                    .filter_map(|(hidden_flag, mut column)| {
+                        if hidden_flag == 1 {
+                            return None;
+                        }
+                        column.is_unique = unique_columns.contains(&column.name);
+                        Some(column)
+                    })
                     .collect()
             })
     }
@@ -93,6 +104,64 @@ impl SqliteDriver {
 
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .context("failed to read SQLite columns")
+            .map(|mut columns| {
+                let unique_columns = self
+                    .load_single_column_unique_columns(table)
+                    .unwrap_or_default();
+                for column in &mut columns {
+                    column.is_unique = unique_columns.contains(&column.name);
+                }
+                columns
+            })
+    }
+
+    fn load_single_column_unique_columns(&self, table: &DbObjectRef) -> Result<BTreeSet<String>> {
+        let sql = format!(
+            "PRAGMA {}.index_list({})",
+            quoted_identifier(&table.schema),
+            quoted_string(&table.name)
+        );
+        let mut statement = self.connection.prepare(&sql).with_context(|| {
+            format!(
+                "failed to inspect SQLite indexes for {}",
+                table.database_qualified_name()
+            )
+        })?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)? > 0,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+
+        let mut unique_columns = BTreeSet::new();
+        for row in rows {
+            let (index_name, is_unique, origin) = row?;
+            if !is_unique || origin == "pk" {
+                continue;
+            }
+            let info_sql = format!(
+                "PRAGMA {}.index_info({})",
+                quoted_identifier(&table.schema),
+                quoted_string(&index_name)
+            );
+            let mut info_statement = self.connection.prepare(&info_sql).with_context(|| {
+                format!(
+                    "failed to inspect SQLite index {} for {}",
+                    index_name,
+                    table.database_qualified_name()
+                )
+            })?;
+            let columns = info_statement
+                .query_map([], |row| row.get::<_, String>(2))?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .context("failed to read SQLite index columns")?;
+            if columns.len() == 1 {
+                unique_columns.insert(columns[0].clone());
+            }
+        }
+        Ok(unique_columns)
     }
 }
 
@@ -439,6 +508,7 @@ fn parse_column_row(row: &Row<'_>) -> rusqlite::Result<DbColumn> {
         data_type: row.get::<_, String>(2)?,
         nullable: row.get::<_, i64>(3)? == 0,
         has_default: row.get::<_, Option<String>>(4)?.is_some(),
+        is_unique: false,
         is_primary_key: row.get::<_, i64>(5)? > 0,
     })
 }

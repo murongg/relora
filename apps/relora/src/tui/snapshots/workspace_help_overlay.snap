@@ -11,14 +11,14 @@
           │Tab          Cycle assets, grid, and editor   supported                                 │          
           │/            Open data filter                 Tab          Cycle editor, results, and   │          
           │n / p        Load next or previous page       assets                                    │          
-          │y / Y / w    Copy row, cell, or WHERE                                                   │          
-          │a / D / i    Open INSERT, stage DELETE row, orStructure                                 │          
-          │stage cell edit                               F4 / Alt-3   Switch to structure tab      │          
-          │                                              Tab          Focus structure grid         │          
-          │                                              Enter        Inspect selected field or row│          
-          │                                              [ / ] / =    Resize or reset column width │          
-          │                                                                                        │          
-          │                                                                                        │          
+          │t            Open the new table form on the                                             │          
+          │selected schema                               Structure                                 │          
+          │y / Y / w    Copy row, cell, or WHERE         F4 / Alt-3   Switch to structure tab      │          
+          │a / D / i    Open INSERT, stage DELETE row, orTab          Focus structure grid         │          
+          │stage cell edit                               e / a        Edit the current table schema│          
+          │                                              or open quick add column                  │          
+          │                                              D / R        Preview drop column SQL or   │          
+          │                                              rename the current table                  │          
           │Driver Support                                                                          │          
           │PostgreSQL   RETURNING | staged CRUD | ANALYZE                                          │          
           │MySQL/MariaDB backticks | EXPLAIN | no RETURNING                                        │          

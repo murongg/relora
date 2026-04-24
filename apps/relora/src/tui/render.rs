@@ -1,7 +1,11 @@
 use super::*;
 use relora_app::view::{
-    InsertRowDatePickerSnapshot, InsertRowDateTimeSegmentView, InsertRowFieldKindView,
-    InsertRowFormSnapshot, SaveSqlDialogView, SavedSqlView,
+    AddColumnFieldFocusView, AddColumnFormSnapshot, AlterColumnFieldFocusView,
+    AlterColumnFormSnapshot, CreateIndexFormSnapshot, CreateTableFieldFocusView,
+    CreateTableFormSnapshot, DropIndexFormSnapshot, InsertRowDatePickerSnapshot,
+    InsertRowDateTimeSegmentView, InsertRowFieldKindView, InsertRowFormSnapshot,
+    RenameTableFormSnapshot, SaveSqlDialogView, SavedSqlView, StructureEditorFieldFocusView,
+    StructureEditorFormSnapshot,
 };
 use relora_core::db::{
     DatabaseKind, DbObjectRef, DriverCapabilities, ExplainFlavor, IdentifierQuoteStyle,
@@ -47,6 +51,34 @@ pub(super) fn draw_workspace(frame: &mut Frame<'_>, app: &WorkspaceApp) {
 
     if let Some(save_sql_dialog) = view.save_sql_dialog {
         draw_save_sql_dialog(frame, frame.area(), save_sql_dialog);
+    }
+
+    if let Some(create_table_form) = app.create_table_form_snapshot() {
+        draw_create_table_form(frame, frame.area(), &create_table_form);
+    }
+
+    if let Some(structure_editor_form) = app.structure_editor_form_snapshot() {
+        draw_structure_editor_form(frame, frame.area(), &structure_editor_form);
+    }
+
+    if let Some(alter_column_form) = app.alter_column_form_snapshot() {
+        draw_alter_column_form(frame, frame.area(), &alter_column_form);
+    }
+
+    if let Some(add_column_form) = app.add_column_form_snapshot() {
+        draw_add_column_form(frame, frame.area(), &add_column_form);
+    }
+
+    if let Some(rename_table_form) = app.rename_table_form_snapshot() {
+        draw_rename_table_form(frame, frame.area(), &rename_table_form);
+    }
+
+    if let Some(create_index_form) = app.create_index_form_snapshot() {
+        draw_create_index_form(frame, frame.area(), &create_index_form);
+    }
+
+    if let Some(drop_index_form) = app.drop_index_form_snapshot() {
+        draw_drop_index_form(frame, frame.area(), &drop_index_form);
     }
 
     if let Some(insert_row_form) = app.insert_row_form_snapshot() {
@@ -1823,6 +1855,900 @@ pub(super) fn draw_save_sql_dialog(
     frame.render_widget(paragraph, popup);
 }
 
+pub(super) fn draw_create_table_form(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    form: &CreateTableFormSnapshot,
+) {
+    let popup = centered_rect(
+        CREATE_TABLE_FORM_WIDTH_PERCENT,
+        CREATE_TABLE_FORM_HEIGHT_PERCENT,
+        area,
+    );
+    frame.render_widget(Clear, popup);
+    let block = focusable_block(
+        format!(
+            "{} {}.{} | Tab next | Enter preview | Ctrl-Enter create | Esc close",
+            TITLE_CREATE_TABLE, form.database_name, form.schema_name
+        ),
+        true,
+    );
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .split(inner);
+
+    let mut items = Vec::with_capacity(form.columns.len() + 1);
+    let table_name_style = if form.selected_row == 0 {
+        Style::default()
+            .fg(theme_accent_color())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(TEXT_SECONDARY)
+    };
+    let table_value = if form.table_name.is_empty() {
+        Span::styled("<empty>", Style::default().fg(TEXT_MUTED))
+    } else {
+        Span::styled(form.table_name.as_str(), Style::default().fg(TEXT_STRONG))
+    };
+    items.push(ListItem::new(Line::from(vec![
+        Span::styled(
+            if form.selected_row == 0 { "› " } else { "  " },
+            Style::default().fg(theme_accent_color()),
+        ),
+        Span::styled("table", table_name_style),
+        Span::raw(" = "),
+        table_value,
+    ])));
+
+    for (index, column) in form.columns.iter().enumerate() {
+        let row_selected = form.selected_row == index + 1;
+        let base_style = if row_selected {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let name_style =
+            if row_selected && form.selected_focus == CreateTableFieldFocusView::ColumnName {
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD)
+            } else if row_selected {
+                Style::default().fg(TEXT_STRONG)
+            } else {
+                Style::default().fg(TEXT_SECONDARY)
+            };
+        let type_style =
+            if row_selected && form.selected_focus == CreateTableFieldFocusView::ColumnType {
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD)
+            } else if row_selected {
+                Style::default().fg(TEXT_STRONG)
+            } else {
+                Style::default().fg(TEXT_MUTED)
+            };
+        let default_style =
+            if row_selected && form.selected_focus == CreateTableFieldFocusView::DefaultValue {
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD)
+            } else if column.default_value.is_some() {
+                Style::default().fg(TEXT_STRONG)
+            } else {
+                Style::default().fg(TEXT_MUTED)
+            };
+        let nullable_style =
+            if row_selected && form.selected_focus == CreateTableFieldFocusView::Nullable {
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD)
+            } else if column.nullable {
+                Style::default().fg(TEXT_MUTED)
+            } else {
+                Style::default().fg(TEXT_STRONG)
+            };
+        let unique_style =
+            if row_selected && form.selected_focus == CreateTableFieldFocusView::Unique {
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD)
+            } else if column.unique {
+                Style::default().fg(TEXT_STRONG)
+            } else {
+                Style::default().fg(TEXT_MUTED)
+            };
+        let primary_key_style =
+            if row_selected && form.selected_focus == CreateTableFieldFocusView::PrimaryKey {
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD)
+            } else if column.primary_key {
+                Style::default().fg(TEXT_STRONG)
+            } else {
+                Style::default().fg(TEXT_MUTED)
+            };
+        let auto_increment_style =
+            if row_selected && form.selected_focus == CreateTableFieldFocusView::AutoIncrement {
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD)
+            } else if column.auto_increment {
+                Style::default().fg(TEXT_STRONG)
+            } else {
+                Style::default().fg(TEXT_MUTED)
+            };
+
+        let name = if column.name.is_empty() {
+            Span::styled("<column>", Style::default().fg(TEXT_MUTED))
+        } else {
+            Span::styled(column.name.as_str(), name_style)
+        };
+
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(
+                if row_selected { "› " } else { "  " },
+                Style::default().fg(theme_accent_color()),
+            ),
+            name,
+            Span::styled("  ", base_style),
+            Span::styled(format!("<{}>", column.type_label), type_style),
+            Span::styled("  ", base_style),
+            Span::styled(
+                match &column.default_value {
+                    Some(value) => format!("DEFAULT={value}"),
+                    None => "DEFAULT=<none>".to_string(),
+                },
+                default_style,
+            ),
+            Span::styled("  ", base_style),
+            Span::styled(
+                if column.nullable { "NULL" } else { "NOT NULL" },
+                nullable_style,
+            ),
+            Span::styled("  ", base_style),
+            Span::styled(
+                if column.unique { "UNIQUE" } else { "no UNIQUE" },
+                unique_style,
+            ),
+            Span::styled("  ", base_style),
+            Span::styled(
+                if column.auto_increment {
+                    "AUTO"
+                } else {
+                    "no AUTO"
+                },
+                auto_increment_style,
+            ),
+            Span::styled("  ", base_style),
+            Span::styled(
+                if column.primary_key { "PK" } else { "no PK" },
+                primary_key_style,
+            ),
+        ])));
+    }
+
+    let list = List::new(items).highlight_style(highlight_style());
+    let mut state = ListState::default();
+    state.select(Some(form.selected_row.min(form.columns.len())));
+    frame.render_stateful_widget(list, sections[0], &mut state);
+
+    let help = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("Field: ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(
+                create_table_focus_label(form.selected_focus),
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  |  ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(
+                create_table_focus_help(form.selected_focus),
+                Style::default().fg(TEXT_SECONDARY),
+            ),
+        ]),
+        Line::from(Span::styled(
+            "Up/Down rows  Tab fields  Left/Right type  Space toggle current flag  + add column  D remove column",
+            Style::default().fg(TEXT_MUTED),
+        )),
+    ])
+    .block(Block::default().borders(Borders::TOP).title("Usage"))
+    .wrap(Wrap { trim: true });
+    frame.render_widget(help, sections[1]);
+}
+
+fn create_table_focus_label(focus: CreateTableFieldFocusView) -> &'static str {
+    match focus {
+        CreateTableFieldFocusView::TableName => "table name",
+        CreateTableFieldFocusView::ColumnName => "column name",
+        CreateTableFieldFocusView::ColumnType => "column type",
+        CreateTableFieldFocusView::DefaultValue => "default",
+        CreateTableFieldFocusView::Nullable => "nullability",
+        CreateTableFieldFocusView::Unique => "unique",
+        CreateTableFieldFocusView::AutoIncrement => "auto increment",
+        CreateTableFieldFocusView::PrimaryKey => "primary key",
+    }
+}
+
+fn create_table_focus_help(focus: CreateTableFieldFocusView) -> &'static str {
+    match focus {
+        CreateTableFieldFocusView::TableName
+        | CreateTableFieldFocusView::ColumnName
+        | CreateTableFieldFocusView::DefaultValue => "type to edit text",
+        CreateTableFieldFocusView::ColumnType => "Left/Right or Space changes the type",
+        CreateTableFieldFocusView::Nullable
+        | CreateTableFieldFocusView::Unique
+        | CreateTableFieldFocusView::AutoIncrement
+        | CreateTableFieldFocusView::PrimaryKey => "Space toggles the current flag",
+    }
+}
+
+pub(super) fn draw_structure_editor_form(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    form: &StructureEditorFormSnapshot,
+) {
+    let popup = centered_rect(
+        CREATE_TABLE_FORM_WIDTH_PERCENT,
+        CREATE_TABLE_FORM_HEIGHT_PERCENT,
+        area,
+    );
+    frame.render_widget(Clear, popup);
+    let block = focusable_block(
+        format!(
+            "Edit Table {}.{} | Tab next | Enter preview | Ctrl-Enter apply | Esc close",
+            form.database_name, form.schema_name
+        ),
+        true,
+    );
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .split(inner);
+
+    let mut items = Vec::with_capacity(form.columns.len() + 1);
+    let table_name_style = if form.selected_row == 0 {
+        Style::default()
+            .fg(theme_accent_color())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(TEXT_SECONDARY)
+    };
+    let table_value = if form.table_name.is_empty() {
+        Span::styled("<empty>", Style::default().fg(TEXT_MUTED))
+    } else {
+        Span::styled(form.table_name.as_str(), Style::default().fg(TEXT_STRONG))
+    };
+    items.push(ListItem::new(Line::from(vec![
+        Span::styled(
+            if form.selected_row == 0 { "› " } else { "  " },
+            Style::default().fg(theme_accent_color()),
+        ),
+        Span::styled("table", table_name_style),
+        Span::raw(" = "),
+        table_value,
+        Span::styled("  ", Style::default().fg(TEXT_MUTED)),
+        Span::styled(
+            format!("was {}", form.old_table_name),
+            Style::default().fg(TEXT_MUTED),
+        ),
+    ])));
+
+    for (index, column) in form.columns.iter().enumerate() {
+        let row_selected = form.selected_row == index + 1;
+        let base_style = if row_selected {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let name_style =
+            if row_selected && form.selected_focus == StructureEditorFieldFocusView::ColumnName {
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD)
+            } else if row_selected {
+                Style::default().fg(TEXT_STRONG)
+            } else {
+                Style::default().fg(TEXT_SECONDARY)
+            };
+        let type_style =
+            if row_selected && form.selected_focus == StructureEditorFieldFocusView::ColumnType {
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD)
+            } else if row_selected {
+                Style::default().fg(TEXT_STRONG)
+            } else {
+                Style::default().fg(TEXT_MUTED)
+            };
+        let default_style =
+            if row_selected && form.selected_focus == StructureEditorFieldFocusView::DefaultValue {
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD)
+            } else if column.default_value.is_some() {
+                Style::default().fg(TEXT_STRONG)
+            } else {
+                Style::default().fg(TEXT_MUTED)
+            };
+        let nullable_style =
+            if row_selected && form.selected_focus == StructureEditorFieldFocusView::Nullable {
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD)
+            } else if column.nullable {
+                Style::default().fg(TEXT_MUTED)
+            } else {
+                Style::default().fg(TEXT_STRONG)
+            };
+        let unique_style =
+            if row_selected && form.selected_focus == StructureEditorFieldFocusView::Unique {
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD)
+            } else if column.unique {
+                Style::default().fg(TEXT_STRONG)
+            } else {
+                Style::default().fg(TEXT_MUTED)
+            };
+        let primary_key_style =
+            if row_selected && form.selected_focus == StructureEditorFieldFocusView::PrimaryKey {
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD)
+            } else if column.primary_key {
+                Style::default().fg(TEXT_STRONG)
+            } else {
+                Style::default().fg(TEXT_MUTED)
+            };
+
+        let name = if column.name.is_empty() {
+            Span::styled("<column>", Style::default().fg(TEXT_MUTED))
+        } else {
+            Span::styled(column.name.as_str(), name_style)
+        };
+
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(
+                if row_selected { "› " } else { "  " },
+                Style::default().fg(theme_accent_color()),
+            ),
+            name,
+            Span::styled("  ", base_style),
+            Span::styled(format!("<{}>", column.type_label), type_style),
+            Span::styled("  ", base_style),
+            Span::styled(
+                match &column.default_value {
+                    Some(value) => format!("DEFAULT={value}"),
+                    None => "DEFAULT=<none>".to_string(),
+                },
+                default_style,
+            ),
+            Span::styled("  ", base_style),
+            Span::styled(
+                if column.nullable { "NULL" } else { "NOT NULL" },
+                nullable_style,
+            ),
+            Span::styled("  ", base_style),
+            Span::styled(
+                if column.unique { "UNIQUE" } else { "no UNIQUE" },
+                unique_style,
+            ),
+            Span::styled("  ", base_style),
+            Span::styled(
+                if column.primary_key { "PK" } else { "no PK" },
+                primary_key_style,
+            ),
+            Span::styled("  ", base_style),
+            Span::styled(
+                if column.existing { "existing" } else { "new" },
+                if column.existing {
+                    Style::default().fg(TEXT_MUTED)
+                } else {
+                    Style::default().fg(theme_accent_color())
+                },
+            ),
+        ])));
+    }
+
+    let list = List::new(items).highlight_style(highlight_style());
+    let mut state = ListState::default();
+    state.select(Some(form.selected_row.min(form.columns.len())));
+    frame.render_stateful_widget(list, sections[0], &mut state);
+
+    let help = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("Field: ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(
+                structure_editor_focus_label(form.selected_focus),
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  |  ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(
+                structure_editor_focus_help(form.selected_focus),
+                Style::default().fg(TEXT_SECONDARY),
+            ),
+        ]),
+        Line::from(Span::styled(
+            "Up/Down rows  Tab fields  Left/Right type  Space toggle NULL/UNIQUE/PK  + add column  D remove column  Ctrl-Enter apply",
+            Style::default().fg(TEXT_MUTED),
+        )),
+    ])
+    .block(Block::default().borders(Borders::TOP).title("Usage"))
+    .wrap(Wrap { trim: true });
+    frame.render_widget(help, sections[1]);
+}
+
+fn structure_editor_focus_label(focus: StructureEditorFieldFocusView) -> &'static str {
+    match focus {
+        StructureEditorFieldFocusView::TableName => "table name",
+        StructureEditorFieldFocusView::ColumnName => "column name",
+        StructureEditorFieldFocusView::ColumnType => "column type",
+        StructureEditorFieldFocusView::DefaultValue => "default",
+        StructureEditorFieldFocusView::Nullable => "nullability",
+        StructureEditorFieldFocusView::Unique => "unique",
+        StructureEditorFieldFocusView::PrimaryKey => "primary key",
+    }
+}
+
+fn structure_editor_focus_help(focus: StructureEditorFieldFocusView) -> &'static str {
+    match focus {
+        StructureEditorFieldFocusView::TableName
+        | StructureEditorFieldFocusView::ColumnName
+        | StructureEditorFieldFocusView::DefaultValue => "type to edit text",
+        StructureEditorFieldFocusView::ColumnType => "Left/Right or Space changes the type",
+        StructureEditorFieldFocusView::Nullable => "Space toggles NULL or NOT NULL",
+        StructureEditorFieldFocusView::Unique => "Space toggles UNIQUE",
+        StructureEditorFieldFocusView::PrimaryKey => "Space toggles PRIMARY KEY",
+    }
+}
+
+pub(super) fn draw_alter_column_form(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    form: &AlterColumnFormSnapshot,
+) {
+    let popup = centered_rect(
+        CREATE_TABLE_FORM_WIDTH_PERCENT,
+        CREATE_TABLE_FORM_HEIGHT_PERCENT / 2,
+        area,
+    );
+    frame.render_widget(Clear, popup);
+    let block = focusable_block(
+        format!(
+            "Alter Column {}.{}.{} | Tab next | Enter preview | Esc close",
+            form.database_name, form.schema_name, form.table_name
+        ),
+        true,
+    );
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .split(inner);
+
+    let name_style = if form.selected_focus == AlterColumnFieldFocusView::ColumnName {
+        Style::default()
+            .fg(theme_accent_color())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(TEXT_STRONG)
+    };
+    let type_style = if form.selected_focus == AlterColumnFieldFocusView::ColumnType {
+        Style::default()
+            .fg(theme_accent_color())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(TEXT_STRONG)
+    };
+    let default_style = if form.selected_focus == AlterColumnFieldFocusView::DefaultValue {
+        Style::default()
+            .fg(theme_accent_color())
+            .add_modifier(Modifier::BOLD)
+    } else if form.default_value.is_some() {
+        Style::default().fg(TEXT_STRONG)
+    } else {
+        Style::default().fg(TEXT_MUTED)
+    };
+    let nullable_style = if form.selected_focus == AlterColumnFieldFocusView::Nullable {
+        Style::default()
+            .fg(theme_accent_color())
+            .add_modifier(Modifier::BOLD)
+    } else if form.nullable {
+        Style::default().fg(TEXT_MUTED)
+    } else {
+        Style::default().fg(TEXT_STRONG)
+    };
+
+    let name = if form.new_name.is_empty() {
+        Span::styled("<column>", Style::default().fg(TEXT_MUTED))
+    } else {
+        Span::styled(form.new_name.as_str(), name_style)
+    };
+
+    let rows = vec![
+        ListItem::new(Line::from(vec![
+            Span::styled("  ", Style::default().fg(theme_accent_color())),
+            Span::styled("table", Style::default().fg(TEXT_SECONDARY)),
+            Span::raw(" = "),
+            Span::styled(form.table_name.as_str(), Style::default().fg(TEXT_STRONG)),
+            Span::styled("  ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(
+                format!("editing {}", form.old_name),
+                Style::default().fg(TEXT_MUTED),
+            ),
+        ])),
+        ListItem::new(Line::from(vec![
+            Span::styled("› ", Style::default().fg(theme_accent_color())),
+            name,
+            Span::raw("  "),
+            Span::styled(format!("<{}>", form.type_label), type_style),
+            Span::raw("  "),
+            Span::styled(
+                match &form.default_value {
+                    Some(value) => format!("DEFAULT={value}"),
+                    None => "DEFAULT=<none>".to_string(),
+                },
+                default_style,
+            ),
+            Span::raw("  "),
+            Span::styled(
+                if form.nullable { "NULL" } else { "NOT NULL" },
+                nullable_style,
+            ),
+        ])),
+    ];
+    frame.render_widget(List::new(rows), sections[0]);
+
+    let help = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("Field: ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(
+                alter_column_focus_label(form.selected_focus),
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  |  ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(
+                alter_column_focus_help(form.selected_focus),
+                Style::default().fg(TEXT_SECONDARY),
+            ),
+        ]),
+        Line::from(Span::styled(
+            "Tab/Shift-Tab fields  Left/Right type  Space toggle NULL  Ctrl-U clear text  Enter SQL preview",
+            Style::default().fg(TEXT_MUTED),
+        )),
+    ])
+    .block(Block::default().borders(Borders::TOP).title("Usage"))
+    .wrap(Wrap { trim: true });
+    frame.render_widget(help, sections[1]);
+}
+
+pub(super) fn draw_add_column_form(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    form: &AddColumnFormSnapshot,
+) {
+    let popup = centered_rect(
+        CREATE_TABLE_FORM_WIDTH_PERCENT,
+        CREATE_TABLE_FORM_HEIGHT_PERCENT / 2,
+        area,
+    );
+    frame.render_widget(Clear, popup);
+    let block = focusable_block(
+        format!(
+            "Add Column {}.{}.{} | Tab next | Enter preview | Esc close",
+            form.database_name, form.schema_name, form.table_name
+        ),
+        true,
+    );
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .split(inner);
+
+    let active_style = |active: bool| {
+        if active {
+            Style::default()
+                .fg(theme_accent_color())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(TEXT_STRONG)
+        }
+    };
+    let nullable_style = if form.selected_focus == AddColumnFieldFocusView::Nullable {
+        Style::default()
+            .fg(theme_accent_color())
+            .add_modifier(Modifier::BOLD)
+    } else if form.nullable {
+        Style::default().fg(TEXT_MUTED)
+    } else {
+        Style::default().fg(TEXT_STRONG)
+    };
+    let default_style = if form.selected_focus == AddColumnFieldFocusView::DefaultValue {
+        Style::default()
+            .fg(theme_accent_color())
+            .add_modifier(Modifier::BOLD)
+    } else if form.default_value.is_some() {
+        Style::default().fg(TEXT_STRONG)
+    } else {
+        Style::default().fg(TEXT_MUTED)
+    };
+
+    let name = if form.name.trim().is_empty() {
+        Span::styled("<column>", Style::default().fg(TEXT_MUTED))
+    } else {
+        Span::styled(
+            form.name.as_str(),
+            active_style(form.selected_focus == AddColumnFieldFocusView::ColumnName),
+        )
+    };
+
+    let rows = vec![
+        ListItem::new(Line::from(vec![
+            Span::styled("  ", Style::default().fg(theme_accent_color())),
+            Span::styled("table", Style::default().fg(TEXT_SECONDARY)),
+            Span::raw(" = "),
+            Span::styled(form.table_name.as_str(), Style::default().fg(TEXT_STRONG)),
+            Span::styled("  ", Style::default().fg(TEXT_MUTED)),
+            Span::styled("new column", Style::default().fg(TEXT_MUTED)),
+        ])),
+        ListItem::new(Line::from(vec![
+            Span::styled("› ", Style::default().fg(theme_accent_color())),
+            name,
+            Span::raw("  "),
+            Span::styled(
+                format!("<{}>", form.type_label),
+                active_style(form.selected_focus == AddColumnFieldFocusView::ColumnType),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                match &form.default_value {
+                    Some(value) => format!("DEFAULT={value}"),
+                    None => "DEFAULT=<none>".to_string(),
+                },
+                default_style,
+            ),
+            Span::raw("  "),
+            Span::styled(
+                if form.nullable { "NULL" } else { "NOT NULL" },
+                nullable_style,
+            ),
+        ])),
+    ];
+    frame.render_widget(List::new(rows), sections[0]);
+
+    let help = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("Field: ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(
+                add_column_focus_label(form.selected_focus),
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  |  ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(
+                add_column_focus_help(form.selected_focus),
+                Style::default().fg(TEXT_SECONDARY),
+            ),
+        ]),
+        Line::from(Span::styled(
+            "Tab/Shift-Tab fields  Left/Right type  Space toggle NULL  Ctrl-U clear text  Enter SQL preview",
+            Style::default().fg(TEXT_MUTED),
+        )),
+    ])
+    .block(Block::default().borders(Borders::TOP).title("Usage"))
+    .wrap(Wrap { trim: true });
+    frame.render_widget(help, sections[1]);
+}
+
+fn alter_column_focus_label(focus: AlterColumnFieldFocusView) -> &'static str {
+    match focus {
+        AlterColumnFieldFocusView::ColumnName => "column name",
+        AlterColumnFieldFocusView::ColumnType => "column type",
+        AlterColumnFieldFocusView::DefaultValue => "default",
+        AlterColumnFieldFocusView::Nullable => "nullability",
+    }
+}
+
+fn alter_column_focus_help(focus: AlterColumnFieldFocusView) -> &'static str {
+    match focus {
+        AlterColumnFieldFocusView::ColumnName | AlterColumnFieldFocusView::DefaultValue => {
+            "type to edit text"
+        }
+        AlterColumnFieldFocusView::ColumnType => "Left/Right or Space changes the type",
+        AlterColumnFieldFocusView::Nullable => "Space toggles NULL / NOT NULL",
+    }
+}
+
+fn add_column_focus_label(focus: AddColumnFieldFocusView) -> &'static str {
+    match focus {
+        AddColumnFieldFocusView::ColumnName => "column name",
+        AddColumnFieldFocusView::ColumnType => "column type",
+        AddColumnFieldFocusView::Nullable => "nullability",
+        AddColumnFieldFocusView::DefaultValue => "default",
+    }
+}
+
+fn add_column_focus_help(focus: AddColumnFieldFocusView) -> &'static str {
+    match focus {
+        AddColumnFieldFocusView::ColumnName | AddColumnFieldFocusView::DefaultValue => {
+            "type to edit text"
+        }
+        AddColumnFieldFocusView::ColumnType => "Left/Right or Space changes the type",
+        AddColumnFieldFocusView::Nullable => "Space toggles NULL / NOT NULL",
+    }
+}
+
+pub(super) fn draw_rename_table_form(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    form: &RenameTableFormSnapshot,
+) {
+    let popup = centered_rect(CREATE_TABLE_FORM_WIDTH_PERCENT, 8, area);
+    frame.render_widget(Clear, popup);
+    let block = focusable_block(
+        format!(
+            "Rename Table {}.{}.{} | Enter preview | Esc close",
+            form.database_name, form.schema_name, form.old_name
+        ),
+        true,
+    );
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let rows = vec![ListItem::new(Line::from(vec![
+        Span::styled(
+            "new name",
+            Style::default()
+                .fg(theme_accent_color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" = "),
+        Span::styled(
+            if form.new_name.trim().is_empty() {
+                "<empty>"
+            } else {
+                form.new_name.as_str()
+            },
+            if form.new_name.trim().is_empty() {
+                Style::default().fg(TEXT_MUTED)
+            } else {
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD)
+            },
+        ),
+        Span::styled(
+            format!("  was {}", form.old_name),
+            Style::default().fg(TEXT_MUTED),
+        ),
+    ]))];
+    frame.render_widget(List::new(rows), inner);
+}
+
+pub(super) fn draw_create_index_form(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    form: &CreateIndexFormSnapshot,
+) {
+    let popup = centered_rect(CREATE_TABLE_FORM_WIDTH_PERCENT, 9, area);
+    frame.render_widget(Clear, popup);
+    let block = focusable_block(
+        format!(
+            "Create Index {}.{}.{} | Enter preview | Esc close",
+            form.database_name, form.schema_name, form.table_name
+        ),
+        true,
+    );
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let rows = vec![
+        ListItem::new(Line::from(vec![
+            Span::styled("column", Style::default().fg(TEXT_MUTED)),
+            Span::raw(" = "),
+            Span::styled(form.column_name.as_str(), Style::default().fg(TEXT_STRONG)),
+        ])),
+        ListItem::new(Line::from(vec![
+            Span::styled(
+                "index name",
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" = "),
+            Span::styled(
+                if form.index_name.trim().is_empty() {
+                    "<empty>"
+                } else {
+                    form.index_name.as_str()
+                },
+                if form.index_name.trim().is_empty() {
+                    Style::default().fg(TEXT_MUTED)
+                } else {
+                    Style::default()
+                        .fg(theme_accent_color())
+                        .add_modifier(Modifier::BOLD)
+                },
+            ),
+        ])),
+        ListItem::new(Line::from(vec![
+            Span::styled("unique", Style::default().fg(TEXT_STRONG)),
+            Span::raw(" = "),
+            Span::styled(
+                if form.unique { "ON" } else { "OFF" },
+                if form.unique {
+                    Style::default()
+                        .fg(theme_accent_color())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(TEXT_MUTED)
+                },
+            ),
+            Span::styled("  (Space toggles)", Style::default().fg(TEXT_MUTED)),
+        ])),
+    ];
+    frame.render_widget(List::new(rows), inner);
+}
+
+pub(super) fn draw_drop_index_form(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    form: &DropIndexFormSnapshot,
+) {
+    let popup = centered_rect(CREATE_TABLE_FORM_WIDTH_PERCENT, 8, area);
+    frame.render_widget(Clear, popup);
+    let block = focusable_block(
+        format!(
+            "Drop Index {}.{}.{} | Enter preview | Esc close",
+            form.database_name, form.schema_name, form.table_name
+        ),
+        true,
+    );
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let rows = vec![ListItem::new(Line::from(vec![
+        Span::styled(
+            "index name",
+            Style::default()
+                .fg(theme_accent_color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" = "),
+        Span::styled(
+            if form.index_name.trim().is_empty() {
+                "<empty>"
+            } else {
+                form.index_name.as_str()
+            },
+            if form.index_name.trim().is_empty() {
+                Style::default().fg(TEXT_MUTED)
+            } else {
+                Style::default()
+                    .fg(theme_accent_color())
+                    .add_modifier(Modifier::BOLD)
+            },
+        ),
+    ]))];
+    frame.render_widget(List::new(rows), inner);
+}
+
 pub(super) fn draw_insert_row_form(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -2106,6 +3032,20 @@ pub(super) fn draw_footer(frame: &mut Frame<'_>, area: Rect, view: WorkspaceView
         FOOTER_SAVED_SQL_HELP
     } else if view.save_sql_dialog.is_some() {
         FOOTER_SAVE_SQL_HELP
+    } else if view.create_table_form_open {
+        FOOTER_CREATE_TABLE_FORM_HELP
+    } else if view.structure_editor_form_open {
+        FOOTER_STRUCTURE_EDITOR_FORM_HELP
+    } else if view.alter_column_form_open {
+        FOOTER_ALTER_COLUMN_FORM_HELP
+    } else if view.add_column_form_open {
+        FOOTER_ADD_COLUMN_FORM_HELP
+    } else if view.rename_table_form_open {
+        FOOTER_RENAME_TABLE_FORM_HELP
+    } else if view.create_index_form_open {
+        FOOTER_CREATE_INDEX_FORM_HELP
+    } else if view.drop_index_form_open {
+        FOOTER_DROP_INDEX_FORM_HELP
     } else if view.insert_row_form_open {
         FOOTER_INSERT_ROW_FORM_HELP
     } else if view.sql_history.is_some() {

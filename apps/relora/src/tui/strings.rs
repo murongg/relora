@@ -23,6 +23,7 @@ pub(super) const TITLE_EDIT_CONNECTION: &str = "Edit Connection";
 pub(super) const TITLE_DELETE_CONNECTION: &str = "Delete Connection";
 pub(super) const TITLE_DRIVER_MISSING: &str = "Driver Missing";
 pub(super) const TITLE_SQLITE_FILE_PICKER: &str = "Select SQLite File";
+pub(super) const TITLE_CREATE_TABLE: &str = "Create Table";
 
 pub(super) const TAB_DATA: &str = "Data";
 pub(super) const TAB_SQL: &str = "SQL";

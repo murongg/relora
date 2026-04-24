@@ -12,3 +12,6 @@ description = "Shared database traits and domain types for Relora."
 anyhow.workspace = true
 serde.workspace = true
 url.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

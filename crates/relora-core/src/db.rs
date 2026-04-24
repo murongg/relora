@@ -373,6 +373,8 @@ pub struct DbColumn {
     pub data_type: String,
     pub nullable: bool,
     pub has_default: bool,
+    #[serde(default)]
+    pub is_unique: bool,
     pub is_primary_key: bool,
 }
 
@@ -502,7 +504,7 @@ pub trait DatabaseDriver: Send {
 
 #[cfg(test)]
 mod tests {
-    use super::DbObjectKind;
+    use super::{DbColumn, DbObjectKind};
 
     #[test]
     fn object_kind_supports_materialized_views_and_functions_on_the_wire() {
@@ -533,5 +535,22 @@ mod tests {
                 DbObjectKind::Function,
             ]
         );
+    }
+
+    #[test]
+    fn db_column_deserializes_old_sidecar_payloads_without_unique_field() {
+        let json = r#"{
+            "name":"id",
+            "data_type":"integer",
+            "nullable":false,
+            "has_default":false,
+            "is_primary_key":true
+        }"#;
+
+        let column: DbColumn = serde_json::from_str(json).expect("legacy payload should decode");
+
+        assert_eq!(column.name, "id");
+        assert!(!column.is_unique);
+        assert!(column.is_primary_key);
     }
 }

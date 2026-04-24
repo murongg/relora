@@ -180,6 +180,15 @@ const RELATION_COLUMN_SQL: &str = r#"
             SELECT 1
             FROM pg_index ix
             WHERE ix.indrelid = c.oid
+              AND ix.indisunique
+              AND NOT ix.indisprimary
+              AND ix.indnatts = 1
+              AND a.attnum = ANY(ix.indkey)
+        ) AS is_unique,
+        EXISTS (
+            SELECT 1
+            FROM pg_index ix
+            WHERE ix.indrelid = c.oid
               AND ix.indisprimary
               AND a.attnum = ANY(ix.indkey)
         ) AS is_primary_key
@@ -224,12 +233,13 @@ const FUNCTION_COLUMN_SQL: &str = r#"
             format_type(arg_types.type_oid, NULL) AS data_type,
             TRUE AS is_nullable,
             FALSE AS has_default,
+            FALSE AS is_unique,
             FALSE AS is_primary_key
         FROM function_target
         CROSS JOIN LATERAL unnest(function_target.arg_types) WITH ORDINALITY AS arg_types(type_oid, ordinality)
         WHERE COALESCE(function_target.arg_modes[arg_types.ordinality], 'i') IN ('i', 'b', 'v')
     )
-    SELECT column_name, data_type, is_nullable, has_default, is_primary_key
+    SELECT column_name, data_type, is_nullable, has_default, is_unique, is_primary_key
     FROM (
         SELECT
             sort_order,
@@ -237,6 +247,7 @@ const FUNCTION_COLUMN_SQL: &str = r#"
             data_type,
             is_nullable,
             has_default,
+            is_unique,
             is_primary_key
         FROM arguments
         UNION ALL
@@ -246,6 +257,7 @@ const FUNCTION_COLUMN_SQL: &str = r#"
             return_type AS data_type,
             FALSE AS is_nullable,
             FALSE AS has_default,
+            FALSE AS is_unique,
             FALSE AS is_primary_key
         FROM function_target
     ) function_columns
@@ -602,7 +614,8 @@ impl DatabaseDriver for PostgresDriver {
                 data_type: row.get(1),
                 nullable: row.get(2),
                 has_default: row.get(3),
-                is_primary_key: row.get(4),
+                is_unique: row.get(4),
+                is_primary_key: row.get(5),
             })
             .collect())
     }

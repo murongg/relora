@@ -139,18 +139,43 @@ fn preview(columns: &[&str], rows: &[&[&str]]) -> TablePreview {
     }
 }
 
-fn columns(values: &[(&str, &str, bool, bool, bool)]) -> Vec<DbColumn> {
+trait IntoTestColumn {
+    fn into_test_column(self) -> DbColumn;
+}
+
+impl IntoTestColumn for (&str, &str, bool, bool, bool) {
+    fn into_test_column(self) -> DbColumn {
+        let (name, data_type, nullable, has_default, is_primary_key) = self;
+        DbColumn {
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            nullable,
+            has_default,
+            is_unique: false,
+            is_primary_key,
+        }
+    }
+}
+
+impl IntoTestColumn for (&str, &str, bool, bool, bool, bool) {
+    fn into_test_column(self) -> DbColumn {
+        let (name, data_type, nullable, has_default, is_primary_key, is_unique) = self;
+        DbColumn {
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            nullable,
+            has_default,
+            is_unique,
+            is_primary_key,
+        }
+    }
+}
+
+fn columns<T: Copy + IntoTestColumn>(values: &[T]) -> Vec<DbColumn> {
     values
         .iter()
-        .map(
-            |(name, data_type, nullable, has_default, is_primary_key)| DbColumn {
-                name: (*name).to_string(),
-                data_type: (*data_type).to_string(),
-                nullable: *nullable,
-                has_default: *has_default,
-                is_primary_key: *is_primary_key,
-            },
-        )
+        .copied()
+        .map(IntoTestColumn::into_test_column)
         .collect()
 }
 
@@ -424,6 +449,106 @@ fn insert_row_form_snapshot_shell() -> Result<AppShell> {
     Ok(AppShell::Workspace(app.into()))
 }
 
+fn create_table_form_snapshot_shell() -> Result<AppShell> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![],
+            vec![],
+        )),
+    }];
+    let mut app = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    app.apply_action(WorkspaceAction::OpenCreateTableForm)?;
+    for ch in "audit_log".chars() {
+        app.insert_create_table_form_char(ch)?;
+    }
+    app.apply_action(WorkspaceAction::NextCreateTableField)?;
+    app.apply_action(WorkspaceAction::MoveCreateTableFieldRight)?;
+    app.apply_action(WorkspaceAction::CycleCreateTableColumnTypeNext)?;
+    Ok(AppShell::Workspace(app.into()))
+}
+
+fn alter_column_form_snapshot_shell() -> Result<AppShell> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![columns(&[
+                ("id", "integer", false, true, true),
+                ("email", "text", false, false, false),
+                ("display_name", "text", true, false, false),
+            ])],
+            vec![],
+        )),
+    }];
+    let mut app = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    app.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut app)?;
+    app.apply_action(WorkspaceAction::ScrollDataGridDown)?;
+    app.apply_action(WorkspaceAction::OpenAlterColumnForm)?;
+    app.apply_action(WorkspaceAction::NextAlterColumnField)?;
+    app.apply_action(WorkspaceAction::CycleAlterColumnTypeNext)?;
+    Ok(AppShell::Workspace(app.into()))
+}
+
+fn add_column_form_snapshot_shell() -> Result<AppShell> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![columns(&[
+                ("id", "integer", false, true, true),
+                ("email", "text", false, false, false),
+            ])],
+            vec![],
+        )),
+    }];
+    let mut app = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    app.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut app)?;
+    app.apply_action(WorkspaceAction::OpenAddColumnForm)?;
+    for ch in "status".chars() {
+        app.insert_add_column_form_char(ch)?;
+    }
+    app.apply_action(WorkspaceAction::NextAddColumnField)?;
+    app.apply_action(WorkspaceAction::CycleAddColumnTypeNext)?;
+    Ok(AppShell::Workspace(app.into()))
+}
+
+fn structure_editor_form_snapshot_shell() -> Result<AppShell> {
+    let bootstraps = vec![ConnectionBootstrap {
+        name: "pg".to_string(),
+        driver: Box::new(MockDriver::new(
+            vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+            vec![preview(&["id"], &[&["1"]])],
+            vec![columns(&[
+                ("id", "integer", false, false, true),
+                ("display_name", "text", true, false, false),
+                ("status", "text", false, true, false),
+            ])],
+            vec![],
+        )),
+    }];
+    let mut app = WorkspaceApp::bootstrap(bootstraps, 50)?;
+    app.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until_structure_loaded(&mut app)?;
+    app.apply_action(WorkspaceAction::ScrollDataGridDown)?;
+    app.apply_action(WorkspaceAction::OpenStructureEditor)?;
+    for _ in 0.."users".len() {
+        app.backspace_structure_editor_form()?;
+    }
+    for ch in "members".chars() {
+        app.insert_structure_editor_form_char(ch)?;
+    }
+    app.apply_action(WorkspaceAction::NextStructureEditorField)?;
+    app.apply_action(WorkspaceAction::MoveStructureEditorFieldRight)?;
+    Ok(AppShell::Workspace(app.into()))
+}
+
 fn row_inspector_snapshot_render() -> Result<String> {
     let bootstraps = vec![ConnectionBootstrap {
         name: "pg".to_string(),
@@ -497,6 +622,34 @@ fn insert_row_form_golden_snapshot() -> Result<()> {
     let shell = insert_row_form_snapshot_shell()?;
     let rendered = render_app_shell(&shell, 140, 32)?;
     assert_matches_snapshot("workspace_insert_row_form", &rendered)
+}
+
+#[test]
+fn create_table_form_golden_snapshot() -> Result<()> {
+    let shell = create_table_form_snapshot_shell()?;
+    let rendered = render_app_shell(&shell, 140, 32)?;
+    assert_matches_snapshot("workspace_create_table_form", &rendered)
+}
+
+#[test]
+fn alter_column_form_golden_snapshot() -> Result<()> {
+    let shell = alter_column_form_snapshot_shell()?;
+    let rendered = render_app_shell(&shell, 140, 32)?;
+    assert_matches_snapshot("workspace_alter_column_form", &rendered)
+}
+
+#[test]
+fn add_column_form_golden_snapshot() -> Result<()> {
+    let shell = add_column_form_snapshot_shell()?;
+    let rendered = render_app_shell(&shell, 140, 32)?;
+    assert_matches_snapshot("workspace_add_column_form", &rendered)
+}
+
+#[test]
+fn structure_editor_form_golden_snapshot() -> Result<()> {
+    let shell = structure_editor_form_snapshot_shell()?;
+    let rendered = render_app_shell(&shell, 140, 32)?;
+    assert_matches_snapshot("workspace_structure_editor_form", &rendered)
 }
 
 #[test]

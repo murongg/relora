@@ -16,18 +16,43 @@ fn object(kind: DbObjectKind, schema: &str, name: &str) -> DbObjectRef {
     }
 }
 
-fn columns(values: &[(&str, &str, bool, bool, bool)]) -> Vec<DbColumn> {
+trait IntoTestColumn {
+    fn into_test_column(self) -> DbColumn;
+}
+
+impl IntoTestColumn for (&str, &str, bool, bool, bool) {
+    fn into_test_column(self) -> DbColumn {
+        let (name, data_type, nullable, has_default, is_primary_key) = self;
+        DbColumn {
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            nullable,
+            has_default,
+            is_unique: false,
+            is_primary_key,
+        }
+    }
+}
+
+impl IntoTestColumn for (&str, &str, bool, bool, bool, bool) {
+    fn into_test_column(self) -> DbColumn {
+        let (name, data_type, nullable, has_default, is_primary_key, is_unique) = self;
+        DbColumn {
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            nullable,
+            has_default,
+            is_unique,
+            is_primary_key,
+        }
+    }
+}
+
+fn columns<T: Copy + IntoTestColumn>(values: &[T]) -> Vec<DbColumn> {
     values
         .iter()
-        .map(
-            |(name, data_type, nullable, has_default, is_primary_key)| DbColumn {
-                name: (*name).to_string(),
-                data_type: (*data_type).to_string(),
-                nullable: *nullable,
-                has_default: *has_default,
-                is_primary_key: *is_primary_key,
-            },
-        )
+        .copied()
+        .map(IntoTestColumn::into_test_column)
         .collect()
 }
 

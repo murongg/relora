@@ -9,8 +9,8 @@ use anyhow::Result;
 use ratatui::backend::TestBackend;
 use relora_app::workspace::SavedSqlEntry;
 use relora_core::db::{
-    Catalog, CatalogSummary, DatabaseDriver, DatabaseEntry, DatabaseKind, DbColumn, DbObjectKind,
-    DbObjectRef, QueryResult, SchemaEntry, SqlExecutionResult, TablePreview,
+    Catalog, CatalogSummary, CommandResult, DatabaseDriver, DatabaseEntry, DatabaseKind, DbColumn,
+    DbObjectKind, DbObjectRef, QueryResult, SchemaEntry, SqlExecutionResult, TablePreview,
 };
 
 #[derive(Debug)]
@@ -256,18 +256,43 @@ fn preview(columns: &[&str], rows: &[&[&str]]) -> TablePreview {
     }
 }
 
-fn columns(values: &[(&str, &str, bool, bool, bool)]) -> Vec<DbColumn> {
+trait IntoTestColumn {
+    fn into_test_column(self) -> DbColumn;
+}
+
+impl IntoTestColumn for (&str, &str, bool, bool, bool) {
+    fn into_test_column(self) -> DbColumn {
+        let (name, data_type, nullable, has_default, is_primary_key) = self;
+        DbColumn {
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            nullable,
+            has_default,
+            is_unique: false,
+            is_primary_key,
+        }
+    }
+}
+
+impl IntoTestColumn for (&str, &str, bool, bool, bool, bool) {
+    fn into_test_column(self) -> DbColumn {
+        let (name, data_type, nullable, has_default, is_primary_key, is_unique) = self;
+        DbColumn {
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            nullable,
+            has_default,
+            is_unique,
+            is_primary_key,
+        }
+    }
+}
+
+fn columns<T: Copy + IntoTestColumn>(values: &[T]) -> Vec<DbColumn> {
     values
         .iter()
-        .map(
-            |(name, data_type, nullable, has_default, is_primary_key)| DbColumn {
-                name: (*name).to_string(),
-                data_type: (*data_type).to_string(),
-                nullable: *nullable,
-                has_default: *has_default,
-                is_primary_key: *is_primary_key,
-            },
-        )
+        .copied()
+        .map(IntoTestColumn::into_test_column)
         .collect()
 }
 
@@ -283,6 +308,13 @@ fn query(columns: &[&str], rows: &[&[&str]]) -> Vec<SqlExecutionResult> {
 
 fn query_batch(items: Vec<Vec<SqlExecutionResult>>) -> Vec<SqlExecutionResult> {
     items.into_iter().flatten().collect()
+}
+
+fn command(tag: &str, rows_affected: u64) -> Vec<SqlExecutionResult> {
+    vec![SqlExecutionResult::Command(CommandResult {
+        tag: tag.to_string(),
+        rows_affected,
+    })]
 }
 
 #[test]
@@ -1785,10 +1817,20 @@ fn browser_enter_opens_saved_query_items_from_the_asset_tree() -> Result<()> {
     let mut app = WorkspaceApp::bootstrap(
         vec![ConnectionBootstrap {
             name: "pg".to_string(),
-            driver: Box::new(MockDriver::new(
-                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
-                vec![preview(&["id"], &[&["1"]])],
-            )),
+            driver: Box::new(
+                MockDriver::new(
+                    vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                    vec![preview(&["id"], &[&["1"]])],
+                )
+                .with_columns(vec![vec![DbColumn {
+                    name: "id".to_string(),
+                    data_type: "integer".to_string(),
+                    nullable: false,
+                    has_default: false,
+                    is_unique: false,
+                    is_primary_key: true,
+                }]]),
+            ),
         }],
         50,
     )?;
@@ -2168,6 +2210,337 @@ fn insert_row_form_datetime_picker_renders_time_shortcuts_hint() -> Result<()> {
 
     assert!(rendered.contains("Left/Right segment  Up/Down adjust  t today  n now"));
     assert!(rendered.contains("Segment: [day] hour minute second"));
+    Ok(())
+}
+
+#[test]
+fn create_table_form_right_key_cycles_type_without_switching_rows() -> Result<()> {
+    let mut app = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+            )),
+        }],
+        50,
+    )?;
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(KEY_BROWSER_CREATE_TABLE), KeyModifiers::NONE),
+    )?;
+    for ch in "audit_log".chars() {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        )?;
+    }
+    handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))?;
+    handle_key(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))?;
+
+    let initial = app
+        .create_table_form_snapshot()
+        .expect("create table form should stay visible");
+    assert_eq!(initial.table_name, "audit_log");
+    assert_eq!(initial.selected_row, 1);
+    assert_eq!(
+        initial.selected_focus,
+        CreateTableFieldFocusView::ColumnType
+    );
+    assert_eq!(initial.columns[0].type_label, "integer");
+
+    handle_key(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))?;
+
+    let form = app
+        .create_table_form_snapshot()
+        .expect("create table form should stay visible");
+    assert_eq!(form.selected_row, 1);
+    assert_eq!(form.selected_focus, CreateTableFieldFocusView::ColumnType);
+    assert_eq!(form.columns[0].type_label, "bigint");
+    Ok(())
+}
+
+#[test]
+fn create_table_form_tab_switches_fields_while_text_accepts_h_and_l() -> Result<()> {
+    let mut app = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+            )),
+        }],
+        50,
+    )?;
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(KEY_BROWSER_CREATE_TABLE), KeyModifiers::NONE),
+    )?;
+    for ch in "hello_log".chars() {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        )?;
+    }
+
+    let table_name = app
+        .create_table_form_snapshot()
+        .expect("create table form should stay visible");
+    assert_eq!(table_name.table_name, "hello_log");
+
+    handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))?;
+    for _ in 0..2 {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        )?;
+    }
+    for ch in "hello_id".chars() {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        )?;
+    }
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))?;
+
+    let form = app
+        .create_table_form_snapshot()
+        .expect("create table form should stay visible");
+    assert_eq!(form.columns[0].name, "hello_id");
+    assert_eq!(form.selected_focus, CreateTableFieldFocusView::ColumnType);
+    Ok(())
+}
+
+#[test]
+fn create_table_form_tab_flow_edits_default_not_null_and_primary_key() -> Result<()> {
+    let mut app = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+            )),
+        }],
+        50,
+    )?;
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(KEY_BROWSER_CREATE_TABLE), KeyModifiers::NONE),
+    )?;
+    for ch in "release_runs".chars() {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        )?;
+    }
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE),
+    )?;
+    for _ in 0..8 {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        )?;
+    }
+    for ch in "state".chars() {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        )?;
+    }
+
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))?;
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))?;
+    for ch in "'pending'".chars() {
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        )?;
+    }
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))?;
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(KEY_CREATE_TABLE_TOGGLE), KeyModifiers::NONE),
+    )?;
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))?;
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))?;
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))?;
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(KEY_CREATE_TABLE_TOGGLE), KeyModifiers::NONE),
+    )?;
+
+    let form = app
+        .create_table_form_snapshot()
+        .expect("create table form should stay visible");
+    assert_eq!(form.table_name, "release_runs");
+    assert_eq!(form.selected_row, 2);
+    assert_eq!(form.selected_focus, CreateTableFieldFocusView::PrimaryKey);
+
+    let state = &form.columns[1];
+    assert_eq!(state.name, "state");
+    assert_eq!(state.default_value.as_deref(), Some("'pending'"));
+    assert!(!state.nullable);
+    assert!(state.primary_key);
+    Ok(())
+}
+
+#[test]
+fn create_table_form_space_toggles_auto_increment_field() -> Result<()> {
+    let mut app = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+            )),
+        }],
+        50,
+    )?;
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(KEY_BROWSER_CREATE_TABLE), KeyModifiers::NONE),
+    )?;
+    handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))?;
+    for _ in 0..5 {
+        handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))?;
+    }
+
+    let focused = app
+        .create_table_form_snapshot()
+        .expect("create table form should stay visible");
+    assert_eq!(
+        focused.selected_focus,
+        CreateTableFieldFocusView::AutoIncrement
+    );
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(KEY_CREATE_TABLE_TOGGLE), KeyModifiers::NONE),
+    )?;
+
+    let form = app
+        .create_table_form_snapshot()
+        .expect("create table form should stay visible");
+    assert!(form.columns[0].auto_increment);
+    assert!(form.columns[0].primary_key);
+    assert!(!form.columns[0].nullable);
+    Ok(())
+}
+
+#[test]
+fn create_table_form_space_cycles_type_select_field() -> Result<()> {
+    let mut app = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(MockDriver::new(
+                vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                vec![preview(&["id"], &[&["1"]])],
+            )),
+        }],
+        50,
+    )?;
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(KEY_BROWSER_CREATE_TABLE), KeyModifiers::NONE),
+    )?;
+    handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))?;
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))?;
+
+    let focused = app
+        .create_table_form_snapshot()
+        .expect("create table form should stay visible");
+    assert_eq!(
+        focused.selected_focus,
+        CreateTableFieldFocusView::ColumnType
+    );
+    assert_eq!(focused.columns[0].type_label, "integer");
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(KEY_CREATE_TABLE_TOGGLE), KeyModifiers::NONE),
+    )?;
+
+    let form = app
+        .create_table_form_snapshot()
+        .expect("create table form should stay visible");
+    assert_eq!(form.selected_focus, CreateTableFieldFocusView::ColumnType);
+    assert_eq!(form.columns[0].type_label, "bigint");
+    Ok(())
+}
+
+#[test]
+fn structure_editor_control_enter_applies_and_returns_to_structure_tab() -> Result<()> {
+    let mut app = WorkspaceApp::bootstrap(
+        vec![ConnectionBootstrap {
+            name: "pg".to_string(),
+            driver: Box::new(
+                MockDriver::new(
+                    vec![catalog("public", &[(DbObjectKind::Table, "users")])],
+                    vec![
+                        preview(&["id", "email"], &[&["1", "alice@example.com"]]),
+                        preview(
+                            &["id", "email", "display_name"],
+                            &[&["1", "alice@example.com", "Alice"]],
+                        ),
+                    ],
+                )
+                .with_columns(vec![
+                    columns(&[
+                        ("id", "integer", false, false, true),
+                        ("email", "text", true, false, false),
+                    ]),
+                    columns(&[
+                        ("id", "integer", false, false, true),
+                        ("email", "text", true, false, false),
+                        ("display_name", "text", true, false, false),
+                    ]),
+                ])
+                .with_executions(vec![command("ALTER TABLE", 0)]),
+            ),
+        }],
+        50,
+    )?;
+
+    app.apply_action(WorkspaceAction::SelectRightStructureTab)?;
+    drain_until(
+        &mut app,
+        |app| {
+            app.view()
+                .structure
+                .is_some_and(|structure| !structure.loading && structure.columns.len() == 2)
+        },
+        "initial structure",
+    )?;
+    app.apply_action(WorkspaceAction::OpenStructureEditor)?;
+    app.apply_action(WorkspaceAction::AddStructureEditorColumn)?;
+    for _ in 0.."new_column_3".len() {
+        app.backspace_structure_editor_form()?;
+    }
+    for ch in "display_name".chars() {
+        app.insert_structure_editor_form_char(ch)?;
+    }
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
+    )?;
+
+    drain_until(
+        &mut app,
+        |app| {
+            app.active_right_tab() == RightPaneTab::Structure
+                && !app.structure_editor_form_open()
+                && app.active_preview().columns == vec!["id", "email", "display_name"]
+        },
+        "direct structure apply",
+    )?;
     Ok(())
 }
 
